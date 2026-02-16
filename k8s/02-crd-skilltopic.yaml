@@ -1,0 +1,124 @@
+# SkillTopic Custom Resource Definition
+#
+# Allows operators to declare skill topics declaratively:
+#
+#   apiVersion: skillscale.io/v1alpha1
+#   kind: SkillTopic
+#   metadata:
+#     name: data-processing
+#   spec:
+#     topic: TOPIC_DATA_PROCESSING
+#     skillsRepo: https://github.com/org/skills.git
+#     skillsPath: data-processing
+#     minReplicas: 1
+#     maxReplicas: 10
+#     timeout: 30000
+#     workers: 2
+#
+# The SkillTopic controller watches these resources and automatically
+# provisions Deployment + KEDA ScaledObject for each topic.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: skilltopics.skillscale.io
+spec:
+  group: skillscale.io
+  names:
+    kind: SkillTopic
+    listKind: SkillTopicList
+    plural: skilltopics
+    singular: skilltopic
+    shortNames:
+      - st
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - topic
+              properties:
+                topic:
+                  type: string
+                  description: "ZeroMQ topic string (e.g. TOPIC_DATA_PROCESSING)"
+                skillsRepo:
+                  type: string
+                  description: "Git URL for the skills repository"
+                skillsPath:
+                  type: string
+                  description: "Path within the repo to the skills directory"
+                  default: "."
+                image:
+                  type: string
+                  description: "Container image for the skill server"
+                  default: "skillscale/skill-server:latest"
+                minReplicas:
+                  type: integer
+                  minimum: 0
+                  default: 1
+                  description: "Minimum pod replicas (0 = scale to zero)"
+                maxReplicas:
+                  type: integer
+                  minimum: 1
+                  default: 10
+                  description: "Maximum pod replicas"
+                timeout:
+                  type: integer
+                  default: 30000
+                  description: "Skill execution timeout in milliseconds"
+                workers:
+                  type: integer
+                  minimum: 1
+                  default: 2
+                  description: "Worker threads per pod"
+                resources:
+                  type: object
+                  properties:
+                    cpuRequest:
+                      type: string
+                      default: "100m"
+                    cpuLimit:
+                      type: string
+                      default: "1000m"
+                    memoryRequest:
+                      type: string
+                      default: "128Mi"
+                    memoryLimit:
+                      type: string
+                      default: "512Mi"
+            status:
+              type: object
+              properties:
+                readyReplicas:
+                  type: integer
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Failed", "Scaling"]
+                lastScaleEvent:
+                  type: string
+                  format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Topic
+          type: string
+          jsonPath: .spec.topic
+        - name: Min
+          type: integer
+          jsonPath: .spec.minReplicas
+        - name: Max
+          type: integer
+          jsonPath: .spec.maxReplicas
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyReplicas

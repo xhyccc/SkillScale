@@ -1,0 +1,43 @@
+# Example SkillTopic resources — applying these triggers the controller
+# to automatically create Deployment + KEDA ScaledObject.
+
+apiVersion: skillscale.io/v1alpha1
+kind: SkillTopic
+metadata:
+  name: data-processing
+  namespace: skillscale
+spec:
+  topic: TOPIC_DATA_PROCESSING
+  skillsRepo: https://github.com/your-org/skillscale-skills.git
+  skillsPath: data-processing
+  image: skillscale/skill-server:latest
+  minReplicas: 1
+  maxReplicas: 10
+  timeout: 30000
+  workers: 2
+  resources:
+    cpuRequest: "100m"
+    cpuLimit: "1000m"
+    memoryRequest: "128Mi"
+    memoryLimit: "512Mi"
+
+---
+apiVersion: skillscale.io/v1alpha1
+kind: SkillTopic
+metadata:
+  name: code-analysis
+  namespace: skillscale
+spec:
+  topic: TOPIC_CODE_ANALYSIS
+  skillsRepo: https://github.com/your-org/skillscale-skills.git
+  skillsPath: code-analysis
+  image: skillscale/skill-server:latest
+  minReplicas: 0         # Scale to zero when idle
+  maxReplicas: 5
+  timeout: 60000
+  workers: 4
+  resources:
+    cpuRequest: "200m"
+    cpuLimit: "2000m"
+    memoryRequest: "256Mi"
+    memoryLimit: "1Gi"

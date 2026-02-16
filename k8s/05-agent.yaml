@@ -1,0 +1,44 @@
+# Python Front-End Agent Deployment + Service
+# Deployed as a Kubernetes Deployment with a single replica.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: skillscale
+  labels:
+    app: agent
+    component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+        component: frontend
+    spec:
+      containers:
+        - name: agent
+          image: skillscale/agent:latest
+          env:
+            - name: SKILLSCALE_PROXY_XSUB
+              value: "tcp://proxy-xsub.skillscale.svc.cluster.local:5444"
+            - name: SKILLSCALE_PROXY_XPUB
+              value: "tcp://proxy-xpub.skillscale.svc.cluster.local:5555"
+            - name: SKILLSCALE_TIMEOUT
+              value: "30"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import zmq; print('ok')"]
+            initialDelaySeconds: 3
+            periodSeconds: 10

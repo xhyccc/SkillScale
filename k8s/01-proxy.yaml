@@ -1,0 +1,117 @@
+# ZeroMQ XPUB/XSUB Proxy — Deployment + Service
+# The proxy binds on well-known ports with static ClusterIP DNS names
+# so all publishers/subscribers can discover it.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zmq-proxy
+  namespace: skillscale
+  labels:
+    app: zmq-proxy
+    component: proxy
+spec:
+  replicas: 1     # Stateless — single instance is sufficient
+  selector:
+    matchLabels:
+      app: zmq-proxy
+  template:
+    metadata:
+      labels:
+        app: zmq-proxy
+        component: proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      containers:
+        - name: proxy
+          image: skillscale/proxy:latest
+          ports:
+            - containerPort: 5444
+              name: xsub
+              protocol: TCP
+            - containerPort: 5555
+              name: xpub
+              protocol: TCP
+            - containerPort: 9100
+              name: metrics
+              protocol: TCP
+          env:
+            - name: SKILLSCALE_XSUB_BIND
+              value: "tcp://*:5444"
+            - name: SKILLSCALE_XPUB_BIND
+              value: "tcp://*:5555"
+            - name: SKILLSCALE_METRICS_PORT
+              value: "9100"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 5444
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 5555
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# Service for XSUB (publishers connect here)
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-xsub
+  namespace: skillscale
+  labels:
+    app: zmq-proxy
+spec:
+  selector:
+    app: zmq-proxy
+  ports:
+    - port: 5444
+      targetPort: 5444
+      name: xsub
+  type: ClusterIP
+
+---
+# Service for XPUB (subscribers connect here)
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-xpub
+  namespace: skillscale
+  labels:
+    app: zmq-proxy
+spec:
+  selector:
+    app: zmq-proxy
+  ports:
+    - port: 5555
+      targetPort: 5555
+      name: xpub
+  type: ClusterIP
+
+---
+# Service for metrics (Prometheus / KEDA)
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-metrics
+  namespace: skillscale
+  labels:
+    app: zmq-proxy
+spec:
+  selector:
+    app: zmq-proxy
+  ports:
+    - port: 9100
+      targetPort: 9100
+      name: metrics
+  type: ClusterIP

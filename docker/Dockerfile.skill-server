@@ -1,0 +1,46 @@
+# ── Stage 1: Build C++ skill server ──
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake pkg-config \
+    libzmq3-dev \
+    nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install cppzmq (header-only)
+ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq.hpp /usr/include/zmq.hpp
+ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq_addon.hpp /usr/include/zmq_addon.hpp
+
+WORKDIR /build
+COPY skill-server/ .
+
+RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
+
+# ── Stage 2: Runtime ──
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libzmq5 \
+    python3 python3-pip \
+    nodejs npm \
+    bash coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/build/skillscale_skill_server /usr/local/bin/skillscale_skill_server
+
+# Default skills directory inside the container
+RUN mkdir -p /skills
+
+ENV SKILLSCALE_TOPIC=TOPIC_DEFAULT
+ENV SKILLSCALE_SKILLS_DIR=/skills
+ENV SKILLSCALE_PROXY_XPUB=tcp://proxy:5555
+ENV SKILLSCALE_PROXY_XSUB=tcp://proxy:5444
+ENV SKILLSCALE_HWM=10000
+ENV SKILLSCALE_TIMEOUT=30000
+ENV SKILLSCALE_WORKERS=2
+
+ENTRYPOINT ["skillscale_skill_server"]

@@ -1,0 +1,56 @@
+# KEDA ScaledObject — scales skill server deployments
+# based on ZeroMQ queue depth exposed via the proxy metrics endpoint.
+#
+# This is a template; the SkillTopic controller generates one per topic.
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: skill-server-data-processing-scaler
+  namespace: skillscale
+  labels:
+    app: skill-server
+    topic: TOPIC_DATA_PROCESSING
+spec:
+  scaleTargetRef:
+    name: skill-server-data-processing
+  pollingInterval: 5
+  cooldownPeriod: 30
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+        metricName: skillscale_topic_queue_depth
+        query: |
+          skillscale_topic_queue_depth{topic="TOPIC_DATA_PROCESSING"}
+        threshold: "5"
+        activationThreshold: "1"
+
+---
+# KEDA ScaledObject for code-analysis (scale-to-zero enabled)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: skill-server-code-analysis-scaler
+  namespace: skillscale
+  labels:
+    app: skill-server
+    topic: TOPIC_CODE_ANALYSIS
+spec:
+  scaleTargetRef:
+    name: skill-server-code-analysis
+  pollingInterval: 5
+  cooldownPeriod: 60
+  minReplicaCount: 0       # Scale to zero
+  maxReplicaCount: 5
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+        metricName: skillscale_topic_queue_depth
+        query: |
+          skillscale_topic_queue_depth{topic="TOPIC_CODE_ANALYSIS"}
+        threshold: "3"
+        activationThreshold: "1"
