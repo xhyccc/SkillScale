@@ -42,7 +42,7 @@ struct Config {
     std::string skills_dir  = "./skills";
     std::string proxy_xpub  = "tcp://127.0.0.1:5555";
     std::string proxy_xsub  = "tcp://127.0.0.1:5444";
-    std::string matcher     = "keyword";     // "keyword" or "llm"
+    std::string matcher     = "llm";         // "llm" or "keyword"
     std::string prompt_file = "";            // optional custom prompt template
     std::string python      = "python3";     // Python executable for LLM subprocess
     int         hwm         = 10000;

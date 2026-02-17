@@ -6,14 +6,14 @@
 #   C++ Skill Server × 2      ← OpenSkills invocation (AGENTS.md + CLI)
 #   Python Agent               ← LLM-powered intent routing
 #
-# Set MATCHER=llm to use LLM-based skill matching (default: keyword)
+# Set MATCHER=keyword to use keyword-based skill matching (default: llm)
 #
 set -e
 
 cd "$(dirname "$0")"
 
 # ── Configuration ──
-MATCHER="${MATCHER:-keyword}"   # keyword | llm
+MATCHER="${MATCHER:-llm}"       # llm | keyword
 PROMPT_FILE="${PROMPT_FILE:-}" # optional custom prompt template
 
 # Clean up old processes
