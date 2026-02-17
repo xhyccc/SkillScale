@@ -1,8 +1,9 @@
-# Python Skill Server Deployments + ConfigMap
+# C++ Skill Server Deployments + ConfigMap
 #
 # Each skill server runs in its own container with:
-#   - Its own AGENTS.md for OpenSkills skill discovery
-#   - LLM-powered skill matching
+#   - AGENTS.md parsing for OpenSkills skill discovery
+#   - OpenSkills CLI for progressive SKILL.md loading
+#   - Keyword-based skill matching
 #   - ZMQ sub/pub communication through the proxy
 
 ---
@@ -50,7 +51,7 @@ spec:
     spec:
       containers:
         - name: skill-server
-          image: skillscale/skill-server-py:latest
+          image: skillscale/skill-server:latest
           env:
             - name: SKILLSCALE_TOPIC
               value: "TOPIC_DATA_PROCESSING"
@@ -81,7 +82,7 @@ spec:
               memory: "1Gi"
           readinessProbe:
             exec:
-              command: ["python3", "-c", "import zmq; print('ok')"]
+              command: ["sh", "-c", "test -f /app/skillscale_skill_server"]
             initialDelaySeconds: 3
             periodSeconds: 10
 
@@ -109,7 +110,7 @@ spec:
     spec:
       containers:
         - name: skill-server
-          image: skillscale/skill-server-py:latest
+          image: skillscale/skill-server:latest
           env:
             - name: SKILLSCALE_TOPIC
               value: "TOPIC_CODE_ANALYSIS"
@@ -140,6 +141,6 @@ spec:
               memory: "1Gi"
           readinessProbe:
             exec:
-              command: ["python3", "-c", "import zmq; print('ok')"]
+              command: ["sh", "-c", "test -f /app/skillscale_skill_server"]
             initialDelaySeconds: 3
             periodSeconds: 10

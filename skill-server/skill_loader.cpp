@@ -2,25 +2,47 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <unordered_set>
 
+// POSIX
+#include <sys/wait.h>
+#include <unistd.h>
+
 namespace fs = std::filesystem;
 
 SkillLoader::SkillLoader(const std::string& skills_dir)
     : skills_dir_(skills_dir) {}
 
-int SkillLoader::load_all() {
-    int count = 0;
+// ──────────────────────────────────────────────────────────
+//  load_all — OpenSkills-first, fallback to recursive scan
+// ──────────────────────────────────────────────────────────
 
+int SkillLoader::load_all() {
     if (!fs::exists(skills_dir_)) {
         std::cerr << "[loader] Skills directory does not exist: "
                   << skills_dir_ << "\n";
         return 0;
     }
+
+    // ── Strategy 1: OpenSkills — parse AGENTS.md for discovery ──
+    std::string agents_md = skills_dir_ + "/AGENTS.md";
+    if (fs::exists(agents_md)) {
+        int count = load_from_agents_md(agents_md);
+        if (count > 0) {
+            std::cout << "[loader] OpenSkills: discovered " << count
+                      << " skills from AGENTS.md\n";
+            return count;
+        }
+    }
+
+    // ── Strategy 2: Legacy — recursive scan for SKILL.md files ──
+    std::cout << "[loader] No AGENTS.md found, falling back to recursive SKILL.md scan\n";
+    int count = 0;
 
     for (auto& entry : fs::recursive_directory_iterator(skills_dir_)) {
         if (!entry.is_regular_file()) continue;
@@ -30,6 +52,7 @@ int SkillLoader::load_all() {
         if (parse_skill_md(entry.path().string(), skill)) {
             std::cout << "[loader] Loaded skill: " << skill.name
                       << " from " << entry.path().string() << "\n";
+            skill.details_loaded = true;
             skills_[skill.name] = std::move(skill);
             ++count;
         }
@@ -37,6 +60,147 @@ int SkillLoader::load_all() {
 
     std::cout << "[loader] Total skills loaded: " << count << "\n";
     return count;
+}
+
+// ──────────────────────────────────────────────────────────
+//  load_from_agents_md — parse <available_skills> XML block
+// ──────────────────────────────────────────────────────────
+
+int SkillLoader::load_from_agents_md(const std::string& agents_md_path) {
+    std::ifstream file(agents_md_path);
+    if (!file.is_open()) {
+        std::cerr << "[loader] Cannot open AGENTS.md: " << agents_md_path << "\n";
+        return 0;
+    }
+
+    std::stringstream buf;
+    buf << file.rdbuf();
+    std::string content = buf.str();
+
+    // Find <available_skills> ... </available_skills> block
+    auto block_start = content.find("<available_skills>");
+    auto block_end   = content.find("</available_skills>");
+    if (block_start == std::string::npos || block_end == std::string::npos) {
+        std::cerr << "[loader] No <available_skills> block in AGENTS.md\n";
+        return 0;
+    }
+
+    std::string block = content.substr(
+        block_start + 18,  // len("<available_skills>")
+        block_end - block_start - 18);
+
+    // Parse each <skill> ... </skill> entry
+    int count = 0;
+    std::string::size_type pos = 0;
+
+    while (true) {
+        auto skill_start = block.find("<skill>", pos);
+        if (skill_start == std::string::npos) break;
+
+        auto skill_end = block.find("</skill>", skill_start);
+        if (skill_end == std::string::npos) break;
+
+        std::string skill_xml = block.substr(
+            skill_start + 7,  // len("<skill>")
+            skill_end - skill_start - 7);
+
+        std::string name = extract_xml_tag(skill_xml, "name");
+        std::string desc = extract_xml_tag(skill_xml, "description");
+        std::string loc  = extract_xml_tag(skill_xml, "location");
+
+        if (name.empty()) {
+            pos = skill_end + 8;
+            continue;
+        }
+
+        SkillDefinition skill;
+        skill.name = name;
+        skill.description = desc;
+
+        // Resolve skill base directory from location
+        fs::path base = fs::path(skills_dir_) / loc;
+        if (fs::exists(base)) {
+            skill.base_dir = fs::absolute(base).string();
+        } else {
+            // Try without trailing slash
+            std::string loc_clean = loc;
+            while (!loc_clean.empty() && loc_clean.back() == '/')
+                loc_clean.pop_back();
+            base = fs::path(skills_dir_) / loc_clean;
+            skill.base_dir = fs::absolute(base).string();
+        }
+
+        // Check if SKILL.md exists at this location
+        fs::path skill_md_path = base / "SKILL.md";
+        if (fs::exists(skill_md_path)) {
+            skill.file_path = fs::absolute(skill_md_path).string();
+        }
+
+        skill.details_loaded = false;  // Progressive disclosure: loaded on demand
+
+        std::cout << "[loader] Discovered skill: " << skill.name
+                  << " (base=" << skill.base_dir << ")\n";
+
+        skills_[skill.name] = std::move(skill);
+        ++count;
+        pos = skill_end + 8;  // len("</skill>")
+    }
+
+    return count;
+}
+
+// ──────────────────────────────────────────────────────────
+//  load_skill_details — progressive disclosure via CLI
+// ──────────────────────────────────────────────────────────
+
+bool SkillLoader::load_skill_details(SkillDefinition& skill) {
+    if (skill.details_loaded) return true;
+
+    std::cout << "[loader] Progressive disclosure: loading SKILL.md for '"
+              << skill.name << "'\n";
+
+    // ── Strategy 1: Try `openskills read <name>` CLI (OpenSkills protocol) ──
+    std::string cli_output;
+    // Use local openskills script; set SKILLSCALE_SKILLS_DIR for skill lookup
+    std::string cmd = "SKILLSCALE_SKILLS_DIR=\"" + skills_dir_ + "\" "
+                      + skills_dir_ + "/../scripts/openskills read "
+                      + skill.name + " 2>/dev/null";
+    int rc = run_command(cmd, cli_output);
+
+    if (rc == 0 && !cli_output.empty()) {
+        std::cout << "[loader] Loaded via openskills CLI (" << cli_output.size()
+                  << " bytes)\n";
+        skill.instructions = cli_output;
+        skill.details_loaded = true;
+        return true;
+    }
+
+    // ── Strategy 2: Read SKILL.md file directly ──
+    if (!skill.file_path.empty() && fs::exists(skill.file_path)) {
+        if (parse_skill_md(skill.file_path, skill)) {
+            skill.details_loaded = true;
+            std::cout << "[loader] Loaded SKILL.md directly from "
+                      << skill.file_path << "\n";
+            return true;
+        }
+    }
+
+    // ── Strategy 3: Try to find SKILL.md in base_dir ──
+    if (!skill.base_dir.empty()) {
+        std::string fallback_path = skill.base_dir + "/SKILL.md";
+        if (fs::exists(fallback_path)) {
+            if (parse_skill_md(fallback_path, skill)) {
+                skill.details_loaded = true;
+                std::cout << "[loader] Loaded SKILL.md from base_dir: "
+                          << fallback_path << "\n";
+                return true;
+            }
+        }
+    }
+
+    std::cerr << "[loader] WARNING: Could not load details for skill '"
+              << skill.name << "'\n";
+    return false;
 }
 
 const SkillDefinition* SkillLoader::find(const std::string& name) const {
@@ -144,6 +308,71 @@ std::string SkillLoader::extract_frontmatter_value(
     };
     trim(value);
     return value;
+}
+
+// ──────────────────────────────────────────────────────────
+//  extract_xml_tag — simple XML tag content extraction
+// ──────────────────────────────────────────────────────────
+
+std::string SkillLoader::extract_xml_tag(const std::string& xml,
+                                          const std::string& tag) {
+    std::string open_tag  = "<" + tag + ">";
+    std::string close_tag = "</" + tag + ">";
+
+    auto start = xml.find(open_tag);
+    if (start == std::string::npos) return "";
+
+    auto content_start = start + open_tag.size();
+    auto end = xml.find(close_tag, content_start);
+    if (end == std::string::npos) return "";
+
+    std::string content = xml.substr(content_start, end - content_start);
+
+    // Trim whitespace
+    auto first = content.find_first_not_of(" \t\n\r");
+    if (first == std::string::npos) return "";
+    auto last = content.find_last_not_of(" \t\n\r");
+    return content.substr(first, last - first + 1);
+}
+
+// ──────────────────────────────────────────────────────────
+//  run_command — capture stdout from a subprocess
+// ──────────────────────────────────────────────────────────
+
+int SkillLoader::run_command(const std::string& cmd, std::string& output) {
+    output.clear();
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+        _exit(127);
+    }
+
+    // Parent
+    close(pipefd[1]);
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        output.append(buf, n);
+    }
+    close(pipefd[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 // ──────────────────────────────────────────────────────────

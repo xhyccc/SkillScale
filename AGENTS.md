@@ -11,12 +11,12 @@ format and are loaded on demand.
 User → Agent (LLM router → extracts intent → selects topic)
          ↓
        ZMQ Proxy (C++ XPUB/XSUB middleware)
-         ├── TOPIC_DATA_PROCESSING  → Python Skill Server (container)
-         │     reads AGENTS.md → LLM matches skill → loads SKILL.md
-         │     → invokes scripts/run.py
-         └── TOPIC_CODE_ANALYSIS    → Python Skill Server (container)
-               reads AGENTS.md → LLM matches skill → loads SKILL.md
-               → invokes scripts/run.py
+         ├── TOPIC_DATA_PROCESSING  → C++ Skill Server (container)
+         │     parses AGENTS.md → keyword matches skill
+         │     → openskills CLI loads SKILL.md → runs scripts/run.py
+         └── TOPIC_CODE_ANALYSIS    → C++ Skill Server (container)
+               parses AGENTS.md → keyword matches skill
+               → openskills CLI loads SKILL.md → runs scripts/run.py
 ```
 
 ### Component Responsibilities
@@ -25,14 +25,15 @@ User → Agent (LLM router → extracts intent → selects topic)
 |-----------|------|
 | **Agent** | Reasons about user input, extracts a self-contained task description, uses LLM to route intent to the correct topic (skill server) |
 | **C++ Proxy** | ZeroMQ XPUB/XSUB star-topology message broker — unchanged middleware |
-| **Python Skill Server** | Containerised per-topic server. Reads its own `AGENTS.md` to discover installed skills (OpenSkills format). Uses LLM to match incoming tasks to the best skill. Loads `SKILL.md` on demand (progressive disclosure). Executes `scripts/run.py` via subprocess. |
+| **C++ Skill Server** | Containerised per-topic server. Parses `AGENTS.md` `<available_skills>` XML for discovery (OpenSkills format). Matches incoming tasks via keyword scoring. Uses `openskills read <name>` CLI for progressive SKILL.md disclosure. Executes `scripts/run.py` via subprocess. |
+| **OpenSkills CLI** | Shell script (`scripts/openskills`) implementing `list`, `read`, and `sync` commands for skill discovery and progressive loading. |
 | **Skills** | Each skill has a `SKILL.md` (metadata + instructions) and `scripts/run.py` (LLM-powered execution). Skills call LLMs for intelligent analysis. |
 
 ### OpenSkills Invocation Flow
 
-1. Skill server starts → reads `skills/<topic>/AGENTS.md` → parses `<available_skills>` XML
+1. Skill server starts → parses `skills/<topic>/AGENTS.md` → extracts `<available_skills>` XML
 2. Task arrives on ZMQ topic → skill server extracts task description
-3. LLM matches task against skill descriptions from AGENTS.md
+3. Keyword scoring matches task against skill descriptions from AGENTS.md
 4. Matched skill's `SKILL.md` is loaded on demand (progressive disclosure)
 5. `scripts/run.py` is executed with task data on stdin
 6. Result is published back to the agent via ZMQ

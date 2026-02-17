@@ -42,7 +42,8 @@ ExecutionResult SkillExecutor::execute(const SkillDefinition& skill,
     }
 
     // ── Strategy 3: Use OpenSkills CLI to read the skill ──
-    std::string cmd = "npx openskills read " + skill.name;
+    std::string cmd = "SKILLSCALE_SKILLS_DIR=\"" + skill.base_dir + "/..\" "
+                      + skill.base_dir + "/../../scripts/openskills read " + skill.name;
     std::cout << "[executor] Using OpenSkills CLI: " << cmd << "\n";
     auto result = run_subprocess(cmd, skill.base_dir, intent);
 

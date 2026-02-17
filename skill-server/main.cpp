@@ -84,7 +84,7 @@ static Config parse_args(int argc, char* argv[]) {
 // ──────────────────────────────────────────────────────────
 static void worker_thread(zmq::context_t& ctx,
                           const Config& cfg,
-                          const SkillLoader& loader) {
+                          SkillLoader& loader) {
     // Each worker has its own PUB socket to the proxy XSUB
     zmq::socket_t pub(ctx, zmq::socket_type::pub);
     pub.set(zmq::sockopt::sndhwm, cfg.hwm);
@@ -172,7 +172,15 @@ static void worker_thread(zmq::context_t& ctx,
                 req.request_id, req.reply_to,
                 "No matching skill found for topic: " + req.topic);
         } else {
-            auto exec_result = executor.execute(*skill, exec_input);
+            // ── Progressive disclosure: load full SKILL.md on demand ──
+            auto& mutable_skill = loader.skills()[skill->name];
+            if (!mutable_skill.details_loaded) {
+                std::cout << "[worker] Progressive disclosure: loading details for '"
+                          << mutable_skill.name << "'\n";
+                loader.load_skill_details(mutable_skill);
+            }
+
+            auto exec_result = executor.execute(mutable_skill, exec_input);
 
             if (exec_result.success) {
                 resp = MessageHandler::make_success(
@@ -269,7 +277,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::thread> workers;
     for (int i = 0; i < cfg.workers; ++i) {
         workers.emplace_back(worker_thread, std::ref(ctx),
-                             std::cref(cfg), std::cref(loader));
+                             std::cref(cfg), std::ref(loader));
     }
 
     std::cout << "[server] Ready. Listening for intents on " << cfg.topic << "\n";

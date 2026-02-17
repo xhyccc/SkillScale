@@ -2,9 +2,9 @@
 # Launch all SkillScale services with nohup, then run the E2E test.
 #
 # Architecture:
-#   C++ Proxy (XPUB/XSUB)  ← ZMQ middleware
-#   Python Skill Server × 2 ← OpenSkills invocation + LLM matching
-#   Python Agent             ← LLM-powered intent routing
+#   C++ Proxy (XPUB/XSUB)     ← ZMQ middleware
+#   C++ Skill Server × 2      ← OpenSkills invocation (AGENTS.md + CLI)
+#   Python Agent               ← LLM-powered intent routing
 #
 set -e
 
@@ -27,8 +27,8 @@ PROXY_PID=$!
 echo "[launcher] Proxy started (pid=$PROXY_PID)"
 sleep 1
 
-# Start Python skill server: data-processing (text-summarizer + csv-analyzer)
-nohup $PYTHON ./skill-server-py/server.py \
+# Start C++ skill server: data-processing (text-summarizer + csv-analyzer)
+nohup ./skill-server/build/skillscale_skill_server \
     --topic TOPIC_DATA_PROCESSING \
     --description "Data processing server — text summarization, CSV analysis, and general data transformation" \
     --skills-dir "$(pwd)/skills/data-processing" \
@@ -36,8 +36,8 @@ nohup $PYTHON ./skill-server-py/server.py \
 SERVER_DATA_PID=$!
 echo "[launcher] Skill server (data-processing) started (pid=$SERVER_DATA_PID)"
 
-# Start Python skill server: code-analysis (code-complexity + dead-code-detector)
-nohup $PYTHON ./skill-server-py/server.py \
+# Start C++ skill server: code-analysis (code-complexity + dead-code-detector)
+nohup ./skill-server/build/skillscale_skill_server \
     --topic TOPIC_CODE_ANALYSIS \
     --description "Code analysis server — cyclomatic complexity metrics, dead code detection, and Python static analysis" \
     --skills-dir "$(pwd)/skills/code-analysis" \
