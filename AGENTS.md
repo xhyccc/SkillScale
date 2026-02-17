@@ -8,13 +8,34 @@ format and are loaded on demand.
 ## Architecture
 
 ```
-User → Agent (LLM router) → ZMQ Proxy (XPUB/XSUB)
-                              ├── TOPIC_DATA_PROCESSING  → Skill Server 1
-                              └── TOPIC_CODE_ANALYSIS    → Skill Server 2
+User → Agent (LLM router → extracts intent → selects topic)
+         ↓
+       ZMQ Proxy (C++ XPUB/XSUB middleware)
+         ├── TOPIC_DATA_PROCESSING  → Python Skill Server (container)
+         │     reads AGENTS.md → LLM matches skill → loads SKILL.md
+         │     → invokes scripts/run.py
+         └── TOPIC_CODE_ANALYSIS    → Python Skill Server (container)
+               reads AGENTS.md → LLM matches skill → loads SKILL.md
+               → invokes scripts/run.py
 ```
 
-The agent uses LLM-powered intent classification to select the correct topic
-based on the skill metadata listed below.
+### Component Responsibilities
+
+| Component | Role |
+|-----------|------|
+| **Agent** | Reasons about user input, extracts a self-contained task description, uses LLM to route intent to the correct topic (skill server) |
+| **C++ Proxy** | ZeroMQ XPUB/XSUB star-topology message broker — unchanged middleware |
+| **Python Skill Server** | Containerised per-topic server. Reads its own `AGENTS.md` to discover installed skills (OpenSkills format). Uses LLM to match incoming tasks to the best skill. Loads `SKILL.md` on demand (progressive disclosure). Executes `scripts/run.py` via subprocess. |
+| **Skills** | Each skill has a `SKILL.md` (metadata + instructions) and `scripts/run.py` (LLM-powered execution). Skills call LLMs for intelligent analysis. |
+
+### OpenSkills Invocation Flow
+
+1. Skill server starts → reads `skills/<topic>/AGENTS.md` → parses `<available_skills>` XML
+2. Task arrives on ZMQ topic → skill server extracts task description
+3. LLM matches task against skill descriptions from AGENTS.md
+4. Matched skill's `SKILL.md` is loaded on demand (progressive disclosure)
+5. `scripts/run.py` is executed with task data on stdin
+6. Result is published back to the agent via ZMQ
 
 ## Available Skills
 

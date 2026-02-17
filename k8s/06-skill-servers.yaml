@@ -1,0 +1,145 @@
+# Python Skill Server Deployments + ConfigMap
+#
+# Each skill server runs in its own container with:
+#   - Its own AGENTS.md for OpenSkills skill discovery
+#   - LLM-powered skill matching
+#   - ZMQ sub/pub communication through the proxy
+
+---
+# ConfigMap holding the LLM provider settings
+# In production, use Kubernetes Secrets for API keys.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-config
+  namespace: skillscale
+data:
+  LLM_PROVIDER: "azure"
+  AZURE_MODEL: "gpt-4o"
+  AZURE_API_VERSION: "2024-12-01-preview"
+
+---
+# Secret for LLM API keys (create manually or via CI)
+# kubectl create secret generic llm-secrets -n skillscale \
+#   --from-literal=AZURE_API_KEY=... \
+#   --from-literal=AZURE_API_BASE=... \
+#   --from-literal=OPENAI_API_KEY=... \
+#   --from-literal=OPENAI_API_BASE=...
+
+---
+# ── Data Processing Skill Server ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skill-server-data-processing
+  namespace: skillscale
+  labels:
+    app: skill-server
+    topic: TOPIC_DATA_PROCESSING
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skill-server
+      topic: TOPIC_DATA_PROCESSING
+  template:
+    metadata:
+      labels:
+        app: skill-server
+        topic: TOPIC_DATA_PROCESSING
+    spec:
+      containers:
+        - name: skill-server
+          image: skillscale/skill-server-py:latest
+          env:
+            - name: SKILLSCALE_TOPIC
+              value: "TOPIC_DATA_PROCESSING"
+            - name: SKILLSCALE_DESCRIPTION
+              value: "Data processing server — text summarization, CSV analysis"
+            - name: SKILLSCALE_SKILLS_DIR
+              value: "/skills"
+            - name: SKILLSCALE_PROXY_XPUB
+              value: "tcp://proxy-xpub.skillscale.svc.cluster.local:5555"
+            - name: SKILLSCALE_PROXY_XSUB
+              value: "tcp://proxy-xsub.skillscale.svc.cluster.local:5444"
+            - name: SKILLSCALE_WORKERS
+              value: "2"
+            - name: SKILLSCALE_TIMEOUT
+              value: "120"
+          envFrom:
+            - configMapRef:
+                name: llm-config
+            - secretRef:
+                name: llm-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import zmq; print('ok')"]
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+---
+# ── Code Analysis Skill Server ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skill-server-code-analysis
+  namespace: skillscale
+  labels:
+    app: skill-server
+    topic: TOPIC_CODE_ANALYSIS
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skill-server
+      topic: TOPIC_CODE_ANALYSIS
+  template:
+    metadata:
+      labels:
+        app: skill-server
+        topic: TOPIC_CODE_ANALYSIS
+    spec:
+      containers:
+        - name: skill-server
+          image: skillscale/skill-server-py:latest
+          env:
+            - name: SKILLSCALE_TOPIC
+              value: "TOPIC_CODE_ANALYSIS"
+            - name: SKILLSCALE_DESCRIPTION
+              value: "Code analysis server — complexity metrics, dead code detection"
+            - name: SKILLSCALE_SKILLS_DIR
+              value: "/skills"
+            - name: SKILLSCALE_PROXY_XPUB
+              value: "tcp://proxy-xpub.skillscale.svc.cluster.local:5555"
+            - name: SKILLSCALE_PROXY_XSUB
+              value: "tcp://proxy-xsub.skillscale.svc.cluster.local:5444"
+            - name: SKILLSCALE_WORKERS
+              value: "4"
+            - name: SKILLSCALE_TIMEOUT
+              value: "120"
+          envFrom:
+            - configMapRef:
+                name: llm-config
+            - secretRef:
+                name: llm-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import zmq; print('ok')"]
+            initialDelaySeconds: 3
+            periodSeconds: 10

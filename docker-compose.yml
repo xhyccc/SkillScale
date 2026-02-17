@@ -22,11 +22,11 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Skill Server: data-processing topic ──
+  # ── Skill Server: data-processing topic (Python + OpenSkills) ──
   skill-server-data:
     build:
       context: .
-      dockerfile: docker/Dockerfile.skill-server
+      dockerfile: docker/Dockerfile.skill-server-py
     environment:
       SKILLSCALE_TOPIC: TOPIC_DATA_PROCESSING
       SKILLSCALE_DESCRIPTION: "Data processing server — text summarization, CSV analysis, and general data transformation"
@@ -34,19 +34,31 @@ services:
       SKILLSCALE_PROXY_XPUB: tcp://proxy:5555
       SKILLSCALE_PROXY_XSUB: tcp://proxy:5444
       SKILLSCALE_WORKERS: "2"
-      SKILLSCALE_TIMEOUT: "30000"
+      SKILLSCALE_TIMEOUT: "120"
+      LLM_PROVIDER: "${LLM_PROVIDER:-azure}"
+      AZURE_API_KEY: "${AZURE_API_KEY}"
+      AZURE_API_BASE: "${AZURE_API_BASE}"
+      AZURE_MODEL: "${AZURE_MODEL:-gpt-4o}"
+      AZURE_API_VERSION: "${AZURE_API_VERSION:-2024-12-01-preview}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_API_BASE: "${OPENAI_API_BASE}"
+      OPENAI_MODEL: "${OPENAI_MODEL}"
+      ZHIPU_API_KEY: "${ZHIPU_API_KEY}"
+      ZHIPU_MODEL: "${ZHIPU_MODEL}"
     volumes:
       - ./skills/data-processing:/skills:ro
+      - ./skills/llm_utils.py:/app/skills/llm_utils.py:ro
+      - ./.env:/app/.env:ro
     depends_on:
       proxy:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Skill Server: code-analysis topic ──
+  # ── Skill Server: code-analysis topic (Python + OpenSkills) ──
   skill-server-code:
     build:
       context: .
-      dockerfile: docker/Dockerfile.skill-server
+      dockerfile: docker/Dockerfile.skill-server-py
     environment:
       SKILLSCALE_TOPIC: TOPIC_CODE_ANALYSIS
       SKILLSCALE_DESCRIPTION: "Code analysis server — cyclomatic complexity, static analysis, and code metrics"
@@ -54,9 +66,21 @@ services:
       SKILLSCALE_PROXY_XPUB: tcp://proxy:5555
       SKILLSCALE_PROXY_XSUB: tcp://proxy:5444
       SKILLSCALE_WORKERS: "2"
-      SKILLSCALE_TIMEOUT: "30000"
+      SKILLSCALE_TIMEOUT: "120"
+      LLM_PROVIDER: "${LLM_PROVIDER:-azure}"
+      AZURE_API_KEY: "${AZURE_API_KEY}"
+      AZURE_API_BASE: "${AZURE_API_BASE}"
+      AZURE_MODEL: "${AZURE_MODEL:-gpt-4o}"
+      AZURE_API_VERSION: "${AZURE_API_VERSION:-2024-12-01-preview}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_API_BASE: "${OPENAI_API_BASE}"
+      OPENAI_MODEL: "${OPENAI_MODEL}"
+      ZHIPU_API_KEY: "${ZHIPU_API_KEY}"
+      ZHIPU_MODEL: "${ZHIPU_MODEL}"
     volumes:
       - ./skills/code-analysis:/skills:ro
+      - ./skills/llm_utils.py:/app/skills/llm_utils.py:ro
+      - ./.env:/app/.env:ro
     depends_on:
       proxy:
         condition: service_healthy

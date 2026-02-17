@@ -1,5 +1,6 @@
-# Example SkillTopic resources — applying these triggers the controller
-# to automatically create Deployment + KEDA ScaledObject.
+# SkillTopic instances — declarative config for each skill server topic.
+# Each has its own container running the Python skill server with
+# OpenSkills-based skill discovery and LLM-powered matching.
 
 apiVersion: skillscale.io/v1alpha1
 kind: SkillTopic
@@ -8,18 +9,17 @@ metadata:
   namespace: skillscale
 spec:
   topic: TOPIC_DATA_PROCESSING
-  skillsRepo: https://github.com/your-org/skillscale-skills.git
   skillsPath: data-processing
-  image: skillscale/skill-server:latest
+  image: skillscale/skill-server-py:latest
   minReplicas: 1
   maxReplicas: 10
-  timeout: 30000
+  timeout: 120
   workers: 2
   resources:
     cpuRequest: "100m"
     cpuLimit: "1000m"
-    memoryRequest: "128Mi"
-    memoryLimit: "512Mi"
+    memoryRequest: "256Mi"
+    memoryLimit: "1Gi"
 
 ---
 apiVersion: skillscale.io/v1alpha1
@@ -29,12 +29,11 @@ metadata:
   namespace: skillscale
 spec:
   topic: TOPIC_CODE_ANALYSIS
-  skillsRepo: https://github.com/your-org/skillscale-skills.git
   skillsPath: code-analysis
-  image: skillscale/skill-server:latest
+  image: skillscale/skill-server-py:latest
   minReplicas: 0         # Scale to zero when idle
   maxReplicas: 5
-  timeout: 60000
+  timeout: 120
   workers: 4
   resources:
     cpuRequest: "200m"

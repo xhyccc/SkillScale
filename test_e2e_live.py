@@ -1,17 +1,17 @@
 """
-End-to-end smoke test: Python agent → C++ Proxy → C++ Skill Server → skill execution → response.
+End-to-end smoke test: Python agent → C++ Proxy → Python Skill Server → skill execution → response.
 
-This test demonstrates the full LLM-powered middleware workflow:
+This test demonstrates the full LLM-powered OpenSkills workflow:
   1. SkillDiscovery scans the skills/ directory to auto-discover topics, their
      descriptions, and per-skill metadata (OpenSkills SKILL.md format).
   2. An LLM-based router uses the metadata_summary() as system-prompt context
      to classify each user intent and route it to the correct ZMQ topic.
-  3. Intents are sent as task-based (Mode 2) — the C++ skill server matches
-     the best installed skill automatically.
+  3. Intents are sent as task-based (Mode 2) — the Python skill server uses
+     LLM + per-server AGENTS.md to match the best installed skill.
   4. Skill scripts call the LLM for intelligent analysis (summarization,
      CSV insights, complexity review, dead-code suggestions).
 
-Two skill servers run:
+Two skill servers run (Python, containerised):
   - TOPIC_DATA_PROCESSING  (text-summarizer, csv-analyzer)
   - TOPIC_CODE_ANALYSIS    (code-complexity, dead-code-detector)
 """
