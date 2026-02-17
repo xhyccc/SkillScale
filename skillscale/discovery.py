@@ -35,6 +35,25 @@ class SkillMetadata:
 
 
 @dataclass
+class TopicMetadata:
+    """
+    Aggregated metadata for a server topic (resource / environment).
+
+    Each topic corresponds to a C++ skill server instance that may host
+    multiple skills and can describe its capabilities for coarse-grained
+    routing.
+    """
+
+    topic: str
+    description: str = ""                   # human-readable server description
+    intent_modes: list = field(default_factory=lambda: ["explicit", "task-based"])
+    skills: List[SkillMetadata] = field(default_factory=list)
+
+    def skill_names(self) -> List[str]:
+        return [s.name for s in self.skills]
+
+
+@dataclass
 class SkillDiscovery:
     """
     Scans a skills directory tree and parses SKILL.md frontmatter.
@@ -52,13 +71,16 @@ class SkillDiscovery:
     """
 
     skills_root: str
+    topic_descriptions: Dict[str, str] = field(default_factory=dict)
     _skills: Dict[str, SkillMetadata] = field(default_factory=dict, init=False)
+    _topics: Dict[str, TopicMetadata] = field(default_factory=dict, init=False)
 
     # ── Public API ─────────────────────────────────────────
 
     def scan(self) -> "SkillDiscovery":
         """Walk the skills directory tree and parse all SKILL.md files."""
         self._skills.clear()
+        self._topics.clear()
         root = os.path.abspath(self.skills_root)
 
         if not os.path.isdir(root):
@@ -71,6 +93,8 @@ class SkillDiscovery:
                 continue
 
             topic = f"TOPIC_{category.upper().replace('-', '_')}"
+            topic_desc = self.topic_descriptions.get(topic, "")
+            topic_meta = TopicMetadata(topic=topic, description=topic_desc)
 
             for skill_name in sorted(os.listdir(category_path)):
                 skill_dir = os.path.join(category_path, skill_name)
@@ -81,9 +105,14 @@ class SkillDiscovery:
                 meta = self._parse_skill_md(skill_md, topic, skill_dir)
                 if meta:
                     self._skills[meta.name] = meta
+                    topic_meta.skills.append(meta)
                     log.info("Discovered skill: %s (topic=%s)", meta.name, topic)
 
-        log.info("Discovery complete: %d skills found", len(self._skills))
+            if topic_meta.skills:
+                self._topics[topic] = topic_meta
+
+        log.info("Discovery complete: %d skills in %d topics",
+                 len(self._skills), len(self._topics))
         return self
 
     def list_skills(self) -> List[SkillMetadata]:
@@ -100,24 +129,35 @@ class SkillDiscovery:
 
     def list_topics(self) -> List[str]:
         """Return unique topic names."""
-        return sorted({s.topic for s in self._skills.values()})
+        return sorted(self._topics.keys())
+
+    def get_topic(self, topic: str) -> Optional[TopicMetadata]:
+        """Return metadata for a given topic."""
+        return self._topics.get(topic)
+
+    def list_topic_metadata(self) -> List[TopicMetadata]:
+        """Return all topic metadata objects."""
+        return list(self._topics.values())
 
     def metadata_summary(self) -> str:
         """
         Compact summary suitable for injecting into an LLM system prompt
         (progressive disclosure — metadata layer only).
+
+        Includes topic descriptions and supported intent modes.
         """
         if not self._skills:
             return "No skills available."
 
         lines = ["Available SkillScale skills:\n"]
-        by_topic: Dict[str, List[SkillMetadata]] = {}
-        for s in self._skills.values():
-            by_topic.setdefault(s.topic, []).append(s)
+        lines.append("Intent modes: explicit (JSON with skill name) | "
+                      "task-based (plain text, server auto-matches)\n")
 
-        for topic in sorted(by_topic):
-            lines.append(f"  Topic: {topic}")
-            for s in by_topic[topic]:
+        for topic in sorted(self._topics):
+            tm = self._topics[topic]
+            desc = f" — {tm.description}" if tm.description else ""
+            lines.append(f"  Topic: {topic}{desc}")
+            for s in tm.skills:
                 lines.append(f"    - {s.name}: {s.description}")
             lines.append("")
 

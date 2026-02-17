@@ -1,10 +1,12 @@
 #include "skill_loader.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -142,4 +144,115 @@ std::string SkillLoader::extract_frontmatter_value(
     };
     trim(value);
     return value;
+}
+
+// ──────────────────────────────────────────────────────────
+//  Description-based skill matching (Mode 2)
+// ──────────────────────────────────────────────────────────
+
+std::vector<std::string> SkillLoader::tokenize(const std::string& text) {
+    std::vector<std::string> tokens;
+    std::string word;
+
+    for (char c : text) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        } else {
+            if (!word.empty()) {
+                tokens.push_back(word);
+                word.clear();
+            }
+        }
+    }
+    if (!word.empty()) tokens.push_back(word);
+
+    return tokens;
+}
+
+int SkillLoader::keyword_score(const std::vector<std::string>& text_tokens,
+                               const std::vector<std::string>& keyword_tokens) {
+    // Stopwords to skip during scoring
+    static const std::unordered_set<std::string> stopwords = {
+        "a", "an", "the", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "can", "shall",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from",
+        "as", "into", "through", "during", "before", "after", "and",
+        "but", "or", "nor", "not", "so", "yet", "both", "either",
+        "neither", "each", "every", "all", "any", "few", "more",
+        "most", "other", "some", "such", "no", "only", "own",
+        "same", "than", "too", "very", "just", "because", "it",
+        "its", "this", "that", "these", "those", "i", "me", "my",
+        "we", "our", "you", "your", "he", "she", "they", "them",
+        "what", "which", "who", "whom", "how", "when", "where", "why",
+        "if", "then", "else", "about", "up", "out", "off", "over",
+        "under", "again", "further", "once", "here", "there", "also",
+        "please", "need", "want", "help", "using",
+    };
+
+    std::unordered_set<std::string> text_set;
+    for (auto& t : text_tokens) {
+        if (stopwords.find(t) == stopwords.end())
+            text_set.insert(t);
+    }
+
+    int score = 0;
+    for (auto& kw : keyword_tokens) {
+        if (stopwords.find(kw) != stopwords.end()) continue;
+
+        // Exact match
+        if (text_set.count(kw)) {
+            score += 3;
+            continue;
+        }
+        // Substring match (e.g. "summariz" in "summarize")
+        for (auto& t : text_set) {
+            if (t.find(kw) != std::string::npos || kw.find(t) != std::string::npos) {
+                score += 1;
+                break;
+            }
+        }
+    }
+    return score;
+}
+
+const SkillDefinition* SkillLoader::match_by_description(
+    const std::string& task_text) const {
+
+    if (skills_.empty()) return nullptr;
+
+    auto text_tokens = tokenize(task_text);
+    if (text_tokens.empty()) return nullptr;
+
+    const SkillDefinition* best = nullptr;
+    int best_score = 0;
+
+    for (auto& [name, skill] : skills_) {
+        // Build keyword pool from skill name + description
+        auto name_tokens = tokenize(name);
+        auto desc_tokens = tokenize(skill.description);
+
+        // Combine
+        std::vector<std::string> all_keywords;
+        all_keywords.insert(all_keywords.end(),
+                            name_tokens.begin(), name_tokens.end());
+        all_keywords.insert(all_keywords.end(),
+                            desc_tokens.begin(), desc_tokens.end());
+
+        int score = keyword_score(text_tokens, all_keywords);
+
+        std::cout << "[loader] Matching '" << name << "': score=" << score << "\n";
+
+        if (score > best_score) {
+            best_score = score;
+            best = &skill;
+        }
+    }
+
+    if (best) {
+        std::cout << "[loader] Best match: " << best->name
+                  << " (score=" << best_score << ")\n";
+    }
+
+    return best;
 }

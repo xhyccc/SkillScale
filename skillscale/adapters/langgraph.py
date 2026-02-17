@@ -52,6 +52,7 @@ class SkillScaleState(TypedDict, total=False):
     input: str              # original user query
     selected_skill: str     # skill name chosen by the router
     intent_payload: str     # formatted intent for the skill server
+    intent_mode: str        # "explicit" or "task-based"
     skill_result: str       # raw markdown from the skill server
     output: str             # final response to user
     error: str              # error message if any
@@ -63,18 +64,36 @@ class SkillScaleState(TypedDict, total=False):
 def make_router_node(
     discovery: SkillDiscovery,
     llm: Any = None,
+    task_based: bool = False,
 ):
     """
     Create a router node that picks the best skill for the user's input.
 
-    If an LLM is provided, it uses the LLM to classify the intent.
-    Otherwise, falls back to simple keyword matching.
+    If ``task_based=True`` (Mode 2), the node sends the raw task
+    description to the skill server and lets it match locally — no
+    client-side skill selection needed.
+
+    If an LLM is provided and ``task_based=False``, it uses the LLM to
+    classify the intent. Otherwise, falls back to simple keyword matching.
     """
 
     async def router(state: SkillScaleState) -> SkillScaleState:
         user_input = state["input"]
         skills = discovery.list_skills()
 
+        # Mode 2: task-based — let the C++ server do the matching
+        if task_based:
+            # Route to the first available topic (or pick by LLM if desired)
+            topics = discovery.list_topics()
+            topic = topics[0] if topics else "TOPIC_DEFAULT"
+            state["selected_skill"] = ""
+            state["intent_mode"] = "task-based"
+            state["intent_payload"] = json.dumps({"task": user_input})
+            # Store the topic for the skill node
+            state["_topic"] = topic
+            return state
+
+        # Mode 1: explicit — select a specific skill
         if llm is not None:
             # Use LLM to pick the skill
             skill_names = [s.name for s in skills]
@@ -101,6 +120,7 @@ def make_router_node(
             chosen = _keyword_match(user_input, skills)
 
         state["selected_skill"] = chosen
+        state["intent_mode"] = "explicit"
         state["intent_payload"] = json.dumps({
             "skill": chosen,
             "data": user_input,
@@ -136,7 +156,28 @@ def make_skill_node(client: SkillScaleClient, discovery: SkillDiscovery):
     async def invoke_skill(state: SkillScaleState) -> SkillScaleState:
         skill_name = state.get("selected_skill", "")
         intent = state.get("intent_payload", state.get("input", ""))
+        mode = state.get("intent_mode", "explicit")
 
+        # In task-based mode, we don't need to resolve skill metadata
+        # — the C++ server does the matching
+        if mode == "task-based":
+            topic = state.get("_topic", "")
+            if not topic:
+                topics = discovery.list_topics()
+                topic = topics[0] if topics else "TOPIC_DEFAULT"
+            try:
+                result = await client.invoke(topic, intent)
+                state["skill_result"] = result
+                state["error"] = ""
+            except asyncio.TimeoutError:
+                state["error"] = f"Timeout invoking topic '{topic}' (task-based)"
+                state["skill_result"] = ""
+            except RuntimeError as e:
+                state["error"] = str(e)
+                state["skill_result"] = ""
+            return state
+
+        # Mode 1: explicit skill invocation
         skill_meta = discovery.get_skill(skill_name)
         if not skill_meta:
             state["error"] = f"Unknown skill: {skill_name}"
@@ -196,13 +237,16 @@ class SkillScaleGraph:
         disc = SkillDiscovery(skills_root=skills_dir).scan()
         return cls(client, disc)
 
-    def build_graph(self, llm: Any = None):
+    def build_graph(self, llm: Any = None, task_based: bool = False):
         """
         Construct and compile a LangGraph workflow.
 
         Args:
             llm: optional LangChain-compatible LLM for intelligent routing.
                  If None, uses keyword-based skill matching.
+            task_based: if True, uses Mode 2 (task-based) intent where
+                        the C++ skill server matches skills by description
+                        instead of the client selecting a skill explicitly.
 
         Returns:
             A compiled LangGraph that can be invoked with:
@@ -210,7 +254,7 @@ class SkillScaleGraph:
         """
         graph = StateGraph(SkillScaleState)
 
-        graph.add_node("router", make_router_node(self.discovery, llm))
+        graph.add_node("router", make_router_node(self.discovery, llm, task_based))
         graph.add_node("invoke_skill", make_skill_node(self.client, self.discovery))
         graph.add_node("format_output", make_output_node())
 

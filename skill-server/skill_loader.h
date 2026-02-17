@@ -40,6 +40,11 @@ public:
     /// Lookup a skill by name (case-insensitive match)
     const SkillDefinition* find(const std::string& name) const;
 
+    /// Match a plain-text task description against installed skill
+    /// descriptions using keyword scoring. Returns the best match or
+    /// nullptr if no skills are loaded.
+    const SkillDefinition* match_by_description(const std::string& task_text) const;
+
     /// All loaded skills
     const std::unordered_map<std::string, SkillDefinition>& skills() const {
         return skills_;
@@ -52,4 +57,11 @@ private:
     bool parse_skill_md(const std::string& path, SkillDefinition& out);
     std::string extract_frontmatter_value(const std::string& yaml,
                                           const std::string& key) const;
+
+    /// Tokenize a string into lowercase words
+    static std::vector<std::string> tokenize(const std::string& text);
+
+    /// Score how well `text` matches `keywords`
+    static int keyword_score(const std::vector<std::string>& text_tokens,
+                             const std::vector<std::string>& keyword_tokens);
 };

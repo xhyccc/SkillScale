@@ -40,6 +40,31 @@ executes the skill script as a subprocess and publishes the result back on the a
 ephemeral reply topic (`AGENT_REPLY_<id>`). Everything is fully asynchronous and
 bidirectional.
 
+## Dual Intent Modes
+
+SkillScale supports two ways to invoke skills:
+
+| Mode | Name | How It Works |
+|------|------|-------------|
+| **Mode 1** | **Explicit** | Client sends `{"skill": "csv-analyzer", "data": "..."}` — the skill server runs the named skill directly |
+| **Mode 2** | **Task-based** | Client sends `{"task": "analyze this CSV data..."}` or plain text — the skill server **automatically matches** the best installed skill using keyword similarity against skill names and descriptions |
+
+Mode 2 is ideal for coarse-grained, resource-oriented routing where the caller doesn't know
+(or care) which specific skill handles the request. Each skill server can also carry a
+`--description` flag characterizing its resource domain for progressive disclosure.
+
+```python
+# Mode 1 — explicit skill selection
+intent = json.dumps({"skill": "text-summarizer", "data": "Long text..."})
+result = await client.invoke("TOPIC_DATA_PROCESSING", intent)
+
+# Mode 2 — task-based (server auto-matches)
+result = await client.invoke_task("TOPIC_DATA_PROCESSING", "summarize this article about AI")
+
+# Mode 2 — plain text also works
+result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b\n1,2")
+```
+
 ## Project Structure
 
 ```
@@ -167,6 +192,7 @@ Binaries are output to `proxy/build/skillscale_proxy` and
 # Terminal 2: Skill Server (data-processing topic)
 ./skill-server/build/skillscale_skill_server \
   --topic TOPIC_DATA_PROCESSING \
+  --description "Data processing — summarization and CSV analysis" \
   --skills-dir ./skills/data-processing
 
 # Terminal 3: Python Agent
@@ -226,6 +252,7 @@ Python Agent → C++ Proxy → C++ Skill Server → subprocess → response.
 | `SKILLSCALE_PROXY_XSUB` | `tcp://127.0.0.1:5444` | agent, skill-server | Proxy XSUB endpoint (publishers connect here) |
 | `SKILLSCALE_PROXY_XPUB` | `tcp://127.0.0.1:5555` | agent, skill-server | Proxy XPUB endpoint (subscribers connect here) |
 | `SKILLSCALE_TOPIC` | `TOPIC_DEFAULT` | skill-server | ZeroMQ topic to subscribe to |
+| `SKILLSCALE_DESCRIPTION` | `""` | skill-server | Human-readable server description (for progressive disclosure) |
 | `SKILLSCALE_SKILLS_DIR` | `./skills` | skill-server | Directory containing skill subdirectories |
 | `SKILLSCALE_WORKERS` | `4` | skill-server | Number of worker threads |
 | `SKILLSCALE_TIMEOUT` | `30000` / `30` | skill-server (ms) / agent (s) | Skill execution / request timeout |
@@ -239,6 +266,7 @@ Python Agent → C++ Proxy → C++ Skill Server → subprocess → response.
 ./skillscale_skill_server [OPTIONS]
 
   --topic <TOPIC>         ZeroMQ topic to subscribe to
+  --description <DESC>    Human-readable server description (for progressive disclosure)
   --skills-dir <DIR>      Path to skills directory
   --proxy-xpub <ADDR>     Proxy XPUB address (default: tcp://127.0.0.1:5555)
   --proxy-xsub <ADDR>     Proxy XSUB address (default: tcp://127.0.0.1:5444)
@@ -256,9 +284,13 @@ Frame 0: "TOPIC_DATA_PROCESSING"          # topic prefix for routing
 Frame 1: {                                 # JSON payload
   "request_id": "a1b2c3d4",
   "reply_to":   "AGENT_REPLY_9f8e7d6c",
-  "intent":     "{\"skill\":\"csv-analyzer\",\"data\":\"name,age\\nAlice,30\"}",
+  "intent":     "...",                     # Mode 1 or Mode 2 (see below)
   "timestamp":  1739836800.123
 }
+
+# Mode 1 (explicit):    intent = '{"skill":"csv-analyzer","data":"name,age\\nAlice,30"}'
+# Mode 2 (task-based):  intent = '{"task":"analyze this CSV data..."}'
+# Mode 2 (plain text):  intent = 'analyze this CSV data: name,age\nAlice,30'
 ```
 
 **Response** (Skill Server → Agent):
@@ -295,8 +327,14 @@ from skillscale import SkillScaleClient
 
 async def main():
     async with SkillScaleClient() as client:
+        # Mode 1: explicit skill selection
         intent = json.dumps({"skill": "text-summarizer", "data": "Some long text..."})
         result = await client.invoke("TOPIC_DATA_PROCESSING", intent)
+        print(result)
+
+        # Mode 2: task-based (server auto-matches the best skill)
+        result = await client.invoke_task("TOPIC_DATA_PROCESSING",
+                                          "summarize this article about AI progress")
         print(result)
 
 asyncio.run(main())
@@ -312,10 +350,12 @@ client = SkillScaleClient()
 await client.connect()
 
 toolkit = SkillScaleToolkit.from_skills_dir(client, "./skills")
-tools = toolkit.get_tools()  # one LangChain Tool per skill
+tools = toolkit.get_tools()       # Mode 1: one tool per skill (explicit)
+task_tools = toolkit.get_task_tools()  # Mode 2: one tool per topic (task-based)
+all_tools = toolkit.get_all_tools()    # both modes combined
 
 # Use with any LangChain agent
-agent = create_react_agent(llm, tools, prompt)
+agent = create_react_agent(llm, all_tools, prompt)
 ```
 
 ### LangGraph
@@ -328,7 +368,10 @@ client = SkillScaleClient()
 await client.connect()
 
 sg = SkillScaleGraph.from_skills_dir(client, "./skills")
-graph = sg.build_graph(llm=my_llm)  # or llm=None for keyword routing
+graph = sg.build_graph(llm=my_llm)  # Mode 1: LLM picks the skill
+
+# Or: Mode 2 — let the C++ server match skills by description
+graph = sg.build_graph(task_based=True)
 result = await graph.ainvoke({"input": "summarize this text..."})
 ```
 
@@ -342,9 +385,11 @@ client = SkillScaleClient()
 await client.connect()
 
 crew_tools = SkillScaleCrewTools.from_skills_dir(client, "./skills")
-tools = crew_tools.get_tools()  # one CrewAI Tool per skill
+tools = crew_tools.get_tools()          # Mode 1: explicit per-skill tools
+task_tools = crew_tools.get_task_tools()  # Mode 2: task-based per-topic tools
+all_tools = crew_tools.get_all_tools()    # both modes
 
-agent = Agent(role="analyst", tools=tools, ...)
+agent = Agent(role="analyst", tools=all_tools, ...)
 ```
 
 ### Skill Discovery (progressive disclosure)
@@ -352,9 +397,20 @@ agent = Agent(role="analyst", tools=tools, ...)
 ```python
 from skillscale import SkillDiscovery
 
-discovery = SkillDiscovery(skills_root="./skills").scan()
+discovery = SkillDiscovery(
+    skills_root="./skills",
+    topic_descriptions={                          # optional: describe each topic
+        "TOPIC_DATA_PROCESSING": "Data processing — summarization, CSV analysis",
+        "TOPIC_CODE_ANALYSIS": "Code analysis — complexity, metrics, static analysis",
+    },
+).scan()
+
 print(discovery.metadata_summary())   # inject into LLM system prompt
 print(discovery.list_topics())        # ["TOPIC_CODE_ANALYSIS", "TOPIC_DATA_PROCESSING"]
+
+# Per-topic metadata (includes description + intent modes)
+for tm in discovery.list_topic_metadata():
+    print(f"{tm.topic}: {tm.description} — skills: {tm.skill_names()}")
 ```
 
 ## Adding a New Skill

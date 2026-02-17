@@ -184,9 +184,16 @@ class SkillScaleClient:
         """
         Publish an intent to a skill topic and await the response.
 
+        Supports two intent modes:
+          - **Explicit** (Mode 1): pass a JSON string like
+            ``{"skill": "csv-analyzer", "data": "…"}``
+          - **Task-based** (Mode 2): pass a plain-text task description
+            or ``{"task": "…"}``. The C++ skill server will match against
+            its locally installed skills by description.
+
         Args:
             topic:   ZMQ topic prefix (e.g. "TOPIC_DATA_PROCESSING")
-            intent:  free-form string or JSON payload passed to the skill
+            intent:  JSON payload (Mode 1) or plain-text description (Mode 2)
             timeout: per-call timeout in seconds (overrides default)
 
         Returns:
@@ -265,6 +272,31 @@ class SkillScaleClient:
             result = await self.invoke(topic, intent, timeout)
             results.append(result)
         return results
+
+    async def invoke_task(
+        self,
+        topic: str,
+        task_description: str,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """
+        Mode 2 — Task-based intent: send a plain-text task description
+        and let the C++ skill server automatically match the best skill
+        from its locally installed skills based on keyword similarity.
+
+        This is equivalent to ``invoke(topic, json.dumps({"task": desc}))``
+        but provides a clearer semantic API.
+
+        Args:
+            topic:            ZMQ topic (e.g. "TOPIC_DATA_PROCESSING")
+            task_description: human-readable task, e.g. "summarize this article"
+            timeout:          per-call timeout in seconds
+
+        Returns:
+            The skill server's markdown response.
+        """
+        payload = json.dumps({"task": task_description})
+        return await self.invoke(topic, payload, timeout)
 
     # ── Housekeeping ───────────────────────────────────────
 

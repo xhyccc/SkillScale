@@ -15,7 +15,10 @@ Usage:
 """
 
 from skillscale.client import SkillScaleClient, ClientConfig
-from skillscale.discovery import SkillDiscovery, SkillMetadata
+from skillscale.discovery import SkillDiscovery, SkillMetadata, TopicMetadata
 
 __version__ = "0.1.0"
-__all__ = ["SkillScaleClient", "ClientConfig", "SkillDiscovery", "SkillMetadata"]
+__all__ = [
+    "SkillScaleClient", "ClientConfig",
+    "SkillDiscovery", "SkillMetadata", "TopicMetadata",
+]

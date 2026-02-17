@@ -18,6 +18,7 @@ sleep 1
 # Start skill server (nohup, fully detached)
 nohup ./skill-server/build/skillscale_skill_server \
     --topic TOPIC_DATA_PROCESSING \
+    --description "Data processing server — text summarization, CSV analysis" \
     --skills-dir "$(pwd)/skills/data-processing" \
     > /tmp/skillscale_server.log 2>&1 &
 SERVER_PID=$!

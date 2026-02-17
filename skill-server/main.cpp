@@ -38,6 +38,7 @@ static void signal_handler(int) { g_running.store(false); }
 // ──────────────────────────────────────────────────────────
 struct Config {
     std::string topic       = "TOPIC_DEFAULT";
+    std::string description = "";            // human-readable server description
     std::string skills_dir  = "./skills";
     std::string proxy_xpub  = "tcp://127.0.0.1:5555";
     std::string proxy_xsub  = "tcp://127.0.0.1:5444";
@@ -52,6 +53,7 @@ static Config parse_args(int argc, char* argv[]) {
 
     // Override from environment first
     if (auto v = std::getenv("SKILLSCALE_TOPIC"))      cfg.topic = v;
+    if (auto v = std::getenv("SKILLSCALE_DESCRIPTION"))cfg.description = v;
     if (auto v = std::getenv("SKILLSCALE_SKILLS_DIR")) cfg.skills_dir = v;
     if (auto v = std::getenv("SKILLSCALE_PROXY_XPUB")) cfg.proxy_xpub = v;
     if (auto v = std::getenv("SKILLSCALE_PROXY_XSUB")) cfg.proxy_xsub = v;
@@ -64,6 +66,7 @@ static Config parse_args(int argc, char* argv[]) {
         std::string key = argv[i];
         std::string val = argv[i + 1];
         if (key == "--topic")      cfg.topic = val;
+        else if (key == "--description")  cfg.description = val;
         else if (key == "--skills-dir")  cfg.skills_dir = val;
         else if (key == "--proxy-xpub")  cfg.proxy_xpub = val;
         else if (key == "--proxy-xsub")  cfg.proxy_xsub = val;
@@ -121,27 +124,46 @@ static void worker_thread(zmq::context_t& ctx,
                   << " intent: " << req.intent.substr(0, 80) << "\n";
 
         // ── Find matching skill ──
-        // Try to find a skill matching the intent keywords
+        // Supports two intent modes:
+        //   Mode 1 (explicit):  {"skill": "csv-analyzer", "data": "..."}
+        //   Mode 2 (task-based): plain text or {"task": "analyze this csv data..."}
         const SkillDefinition* skill = nullptr;
         std::string exec_input = req.intent; // data to pass to the script
 
-        // First: try to find by explicit skill name in the intent JSON
+        bool explicit_skill = false;
+        // Attempt to parse intent as JSON
         try {
             json intent_json = json::parse(req.intent);
+
+            // Mode 1: explicit skill name
             if (intent_json.contains("skill")) {
                 skill = loader.find(intent_json["skill"].get<std::string>());
+                explicit_skill = true;
             }
-            // Extract the "data" field for the script's stdin/env
+
+            // Extract the "data" / "task" field for the script
             if (intent_json.contains("data")) {
                 exec_input = intent_json["data"].get<std::string>();
+            } else if (intent_json.contains("task")) {
+                exec_input = intent_json["task"].get<std::string>();
+            }
+
+            // Mode 2: task description — match against skill descriptions
+            if (!explicit_skill && intent_json.contains("task")) {
+                std::string task = intent_json["task"].get<std::string>();
+                std::cout << "[worker] Mode 2: matching task description against installed skills\n";
+                skill = loader.match_by_description(task);
             }
         } catch (...) {
-            // Intent is plain text, not JSON
+            // Intent is plain text — Mode 2: match by description
+            std::cout << "[worker] Mode 2: plain text intent, matching by description\n";
+            skill = loader.match_by_description(req.intent);
         }
 
-        // Fallback: use first skill available on this server
-        if (!skill && !loader.skills().empty()) {
+        // Fallback: use first skill if single-skill server
+        if (!skill && !loader.skills().empty() && loader.skills().size() == 1) {
             skill = &loader.skills().begin()->second;
+            std::cout << "[worker] Fallback: single skill server, using " << skill->name << "\n";
         }
 
         OutgoingResponse resp;
@@ -186,12 +208,13 @@ int main(int argc, char* argv[]) {
     Config cfg = parse_args(argc, argv);
 
     std::cout << "[server] SkillScale Skill Server starting\n"
-              << "[server]   Topic     : " << cfg.topic << "\n"
-              << "[server]   Skills dir: " << cfg.skills_dir << "\n"
-              << "[server]   Proxy XPUB: " << cfg.proxy_xpub << "\n"
-              << "[server]   Proxy XSUB: " << cfg.proxy_xsub << "\n"
-              << "[server]   HWM       : " << cfg.hwm << "\n"
-              << "[server]   Workers   : " << cfg.workers << "\n";
+              << "[server]   Topic      : " << cfg.topic << "\n"
+              << "[server]   Description: " << (cfg.description.empty() ? "(none)" : cfg.description) << "\n"
+              << "[server]   Skills dir : " << cfg.skills_dir << "\n"
+              << "[server]   Proxy XPUB : " << cfg.proxy_xpub << "\n"
+              << "[server]   Proxy XSUB : " << cfg.proxy_xsub << "\n"
+              << "[server]   HWM        : " << cfg.hwm << "\n"
+              << "[server]   Workers    : " << cfg.workers << "\n";
 
     // ── Load skills ──
     SkillLoader loader(cfg.skills_dir);
@@ -204,6 +227,8 @@ int main(int argc, char* argv[]) {
     // ── Broadcast skill metadata (for progressive disclosure) ──
     json metadata;
     metadata["topic"] = cfg.topic;
+    metadata["description"] = cfg.description;
+    metadata["intent_modes"] = json::array({"explicit", "task-based"});
     metadata["skills"] = json::array();
     for (auto& [name, skill] : loader.skills()) {
         json s;

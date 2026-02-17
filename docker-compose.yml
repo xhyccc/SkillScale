@@ -29,6 +29,7 @@ services:
       dockerfile: docker/Dockerfile.skill-server
     environment:
       SKILLSCALE_TOPIC: TOPIC_DATA_PROCESSING
+      SKILLSCALE_DESCRIPTION: "Data processing server — text summarization, CSV analysis, and general data transformation"
       SKILLSCALE_SKILLS_DIR: /skills
       SKILLSCALE_PROXY_XPUB: tcp://proxy:5555
       SKILLSCALE_PROXY_XSUB: tcp://proxy:5444
@@ -48,6 +49,7 @@ services:
       dockerfile: docker/Dockerfile.skill-server
     environment:
       SKILLSCALE_TOPIC: TOPIC_CODE_ANALYSIS
+      SKILLSCALE_DESCRIPTION: "Code analysis server — cyclomatic complexity, static analysis, and code metrics"
       SKILLSCALE_SKILLS_DIR: /skills
       SKILLSCALE_PROXY_XPUB: tcp://proxy:5555
       SKILLSCALE_PROXY_XSUB: tcp://proxy:5444

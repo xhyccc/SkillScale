@@ -64,6 +64,17 @@ class SkillInvokeInput(BaseModel):
     )
 
 
+class TaskDescriptionInput(BaseModel):
+    """Input schema for task-based intent (Mode 2)."""
+
+    task: str = Field(
+        description=(
+            "A plain-text task description. The skill server will "
+            "automatically match the best skill based on its description."
+        )
+    )
+
+
 class TopicPublishInput(BaseModel):
     """Input schema for publishing to a raw ZMQ topic."""
 
@@ -177,6 +188,54 @@ if HAS_LANGCHAIN:
             except RuntimeError as e:
                 raise ToolException(str(e))
 
+    # ──────────────────────────────────────────────────────
+    #  Task-Based Tool (Mode 2) — server-side skill matching
+    # ──────────────────────────────────────────────────────
+
+    class SkillScaleTaskTool(BaseTool):
+        """
+        A LangChain tool that sends a task description to a SkillScale
+        topic. The C++ skill server matches the best skill automatically
+        based on installed skill descriptions (Mode 2 — task-based).
+        """
+
+        name: str = "skillscale_task"
+        description: str = ""
+        args_schema: Type[BaseModel] = TaskDescriptionInput
+        handle_tool_error: bool = True
+
+        client: Any = None
+        skill_topic: str = ""
+
+        class Config:
+            arbitrary_types_allowed = True
+
+        def _run(
+            self,
+            task: str,
+            run_manager: Optional[CallbackManagerForToolRun] = None,
+        ) -> str:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self._arun(task))
+            finally:
+                loop.close()
+
+        async def _arun(
+            self,
+            task: str,
+            run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+        ) -> str:
+            payload = json.dumps({"task": task})
+            try:
+                return await self.client.invoke(self.skill_topic, payload)
+            except asyncio.TimeoutError:
+                raise ToolException(
+                    f"Timeout: no skill server responded on topic '{self.skill_topic}'."
+                )
+            except RuntimeError as e:
+                raise ToolException(str(e))
+
 
 # ──────────────────────────────────────────────────────────
 #  Toolkit — bundles all discovered skills into LangChain tools
@@ -208,7 +267,7 @@ class SkillScaleToolkit:
         return cls(client, disc)
 
     def get_tools(self) -> list:
-        """Return one LangChain Tool per discovered skill."""
+        """Return one LangChain Tool per discovered skill (Mode 1 — explicit)."""
         tools = []
         for skill in self.discovery.list_skills():
             tool = SkillScaleTool(
@@ -220,6 +279,34 @@ class SkillScaleToolkit:
             )
             tools.append(tool)
         return tools
+
+    def get_task_tools(self) -> list:
+        """
+        Return one LangChain Tool per topic (Mode 2 — task-based).
+
+        Instead of selecting a specific skill, these tools send a task
+        description to the topic's skill server, which automatically
+        matches the best installed skill.
+        """
+        tools = []
+        for topic_meta in self.discovery.list_topic_metadata():
+            skill_names = ", ".join(topic_meta.skill_names())
+            desc = topic_meta.description or topic_meta.topic
+            tool = SkillScaleTaskTool(
+                name=f"task_{topic_meta.topic.lower()}",
+                description=(
+                    f"Send a task to {desc}. The server auto-selects the "
+                    f"best skill from: {skill_names}."
+                ),
+                client=self.client,
+                skill_topic=topic_meta.topic,
+            )
+            tools.append(tool)
+        return tools
+
+    def get_all_tools(self) -> list:
+        """Return both explicit per-skill tools and task-based topic tools."""
+        return self.get_tools() + self.get_task_tools()
 
     def get_topic_tool(self) -> "SkillScaleTopicTool":
         """Return a single generic tool that publishes to any topic."""
