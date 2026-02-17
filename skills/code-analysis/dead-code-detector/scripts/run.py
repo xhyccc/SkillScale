@@ -205,6 +205,66 @@ def find_empty_functions(tree: ast.AST) -> List[Issue]:
     return issues
 
 
+def extract_python_code(text: str) -> str:
+    """Extract Python source code from text that may contain natural language.
+
+    Tries multiple strategies:
+    1. Parse the whole text as Python (works if input is pure code).
+    2. Extract fenced code blocks (```python ... ``` or ``` ... ```).
+    3. Find the first line starting with a Python keyword and take everything from there.
+    4. Strip lines one at a time from the top.
+    """
+    import re
+
+    text = text.strip()
+    if not text:
+        return text
+
+    # Strategy 1: whole text is valid Python
+    try:
+        ast.parse(text)
+        return text
+    except SyntaxError:
+        pass
+
+    # Strategy 2: fenced code blocks
+    fenced = re.findall(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
+    if fenced:
+        combined = "\n\n".join(f.strip() for f in fenced)
+        try:
+            ast.parse(combined)
+            return combined
+        except SyntaxError:
+            pass
+
+    # Strategy 3: find the first line that looks like Python code
+    python_starts = re.compile(
+        r"^(import |from |def |class |async def |@|if |for |while |with |try:|"
+        r"[a-zA-Z_]\w*\s*=|[a-zA-Z_]\w*\(|#)", re.MULTILINE
+    )
+    m = python_starts.search(text)
+    if m:
+        candidate = text[m.start():]
+        try:
+            ast.parse(candidate)
+            return candidate
+        except SyntaxError:
+            pass
+
+    # Strategy 4: try dropping lines one at a time from the top
+    lines = text.splitlines()
+    for i in range(1, min(len(lines), 20)):
+        candidate = "\n".join(lines[i:])
+        try:
+            ast.parse(candidate)
+            return candidate
+        except SyntaxError:
+            continue
+
+    # Give up — return original and let caller handle the error
+    return text
+
+
 def main():
     source = os.environ.get("SKILLSCALE_INTENT", "")
     if not source:
@@ -217,6 +277,9 @@ def main():
     if len(source) > 500_000:
         print("**Error:** Source exceeds 500KB limit.", file=sys.stderr)
         sys.exit(1)
+
+    # Extract Python code from potentially mixed natural language + code input
+    source = extract_python_code(source)
 
     try:
         tree = ast.parse(source)

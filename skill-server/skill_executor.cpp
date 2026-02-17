@@ -18,7 +18,8 @@
 
 namespace fs = std::filesystem;
 
-SkillExecutor::SkillExecutor(int timeout_ms) : timeout_ms_(timeout_ms) {}
+SkillExecutor::SkillExecutor(int timeout_ms, const std::string& python_path)
+    : timeout_ms_(timeout_ms), python_path_(python_path) {}
 
 ExecutionResult SkillExecutor::execute(const SkillDefinition& skill,
                                        const std::string& intent) {
@@ -37,7 +38,7 @@ ExecutionResult SkillExecutor::execute(const SkillDefinition& skill,
     std::string run_py = skill.base_dir + "/scripts/run.py";
     if (fs::exists(run_py)) {
         std::cout << "[executor] Found scripts/run.py, using Python execution\n";
-        std::string cmd = "python3 " + run_py;
+        std::string cmd = python_path_ + " " + run_py;
         return run_subprocess(cmd, skill.base_dir, intent);
     }
 

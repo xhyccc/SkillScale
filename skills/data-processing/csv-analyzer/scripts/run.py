@@ -121,6 +121,53 @@ def format_stats_markdown(results: list[dict], num_rows: int, num_cols: int) -> 
     return "\n".join(lines)
 
 
+def extract_csv_data(text: str) -> str:
+    """Extract CSV data from text that may contain natural language prefix.
+
+    Tries multiple strategies:
+    1. Parse straight as CSV — if it yields 2+ columns, use it.
+    2. Look for a fenced code block.
+    3. Find the first line that looks like a CSV header (contains commas)
+       and return everything from there.
+    4. Drop lines one at a time from the top until we get valid multi-column CSV.
+    """
+    import re
+
+    text = text.strip()
+    if not text:
+        return text
+
+    def _csv_cols(candidate: str) -> int:
+        """Return the number of columns in the first row of the candidate."""
+        try:
+            rows = list(csv.reader(io.StringIO(candidate)))
+            return len(rows[0]) if rows else 0
+        except Exception:
+            return 0
+
+    # Strategy 1: whole text is valid multi-column CSV
+    if _csv_cols(text) >= 2:
+        return text
+
+    # Strategy 2: fenced code blocks
+    fenced = re.findall(r"```(?:csv)?\s*\n(.*?)```", text, re.DOTALL)
+    if fenced:
+        combined = "\n".join(f.strip() for f in fenced)
+        if _csv_cols(combined) >= 2:
+            return combined
+
+    # Strategy 3: find first line with commas (likely CSV header)
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "," in line:
+            candidate = "\n".join(lines[i:])
+            if _csv_cols(candidate) >= 2:
+                return candidate
+
+    # Give up — return original and let caller handle it
+    return text
+
+
 def main():
     data = os.environ.get("SKILLSCALE_INTENT", "")
     if not data:
@@ -129,6 +176,9 @@ def main():
     if not data.strip():
         print("**Error:** No CSV data provided.", file=sys.stderr)
         sys.exit(1)
+
+    # Extract CSV data from potentially mixed natural language + CSV input
+    data = extract_csv_data(data)
 
     reader = csv.reader(io.StringIO(data))
     rows = list(reader)

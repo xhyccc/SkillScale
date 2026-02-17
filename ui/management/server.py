@@ -198,6 +198,7 @@ def launch_proxy(req: LaunchProxyRequest = LaunchProxyRequest()):
         stdout=open(log_file, "w"),
         stderr=subprocess.STDOUT,
         env=env,
+        cwd=str(PROJECT_ROOT),
     )
     services["proxy"] = ServiceInfo(
         name="proxy",
@@ -241,6 +242,7 @@ def launch_server(req: LaunchRequest):
         cmd,
         stdout=open(log_file, "w"),
         stderr=subprocess.STDOUT,
+        cwd=str(PROJECT_ROOT),
     )
     services[svc_name] = ServiceInfo(
         name=svc_name,

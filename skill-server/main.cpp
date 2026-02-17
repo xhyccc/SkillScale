@@ -104,7 +104,7 @@ static void worker_thread(zmq::context_t& ctx,
     zmq::socket_t pull(ctx, zmq::socket_type::pull);
     pull.connect("inproc://workers");
 
-    SkillExecutor executor(cfg.timeout);
+    SkillExecutor executor(cfg.timeout, cfg.python);
 
     while (g_running.load()) {
         zmq::pollitem_t item = {static_cast<void*>(pull), 0, ZMQ_POLLIN, 0};

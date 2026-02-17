@@ -24,7 +24,8 @@ struct ExecutionResult {
 class SkillExecutor {
 public:
     /// Maximum execution time before SIGKILL (milliseconds)
-    explicit SkillExecutor(int timeout_ms = 30000);
+    explicit SkillExecutor(int timeout_ms = 30000,
+                           const std::string& python_path = "python3");
 
     /**
      * Execute a skill with the given user intent.
@@ -38,6 +39,7 @@ public:
 
 private:
     int timeout_ms_;
+    std::string python_path_;
 
     /// Execute a command, capture stdout/stderr, enforce timeout
     ExecutionResult run_subprocess(const std::string& command,
