@@ -123,6 +123,10 @@ static void proxy_loop(zmq::socket_t& xsub, zmq::socket_t& xpub) {
 //  Main
 // ──────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
+    // Force line-buffered stdout so logs appear immediately when redirected
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IOLBF, 0);
+
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 

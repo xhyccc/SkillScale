@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-SkillScale Management UI — FastAPI Backend
+SkillScale Unified UI — FastAPI Backend
 
-Provides REST APIs for:
-- Listing skill server folders and their skills
-- Launching / stopping / restarting skill servers and the proxy
-- Streaming log output
-- Viewing service status
+Merges management + chat + tracing into one server on port 8401.
 """
 
 import asyncio
@@ -17,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -32,7 +29,10 @@ SKILLS_DIR = PROJECT_ROOT / "skills"
 PROXY_BIN = PROJECT_ROOT / "proxy" / "build" / "skillscale_proxy"
 SERVER_BIN = PROJECT_ROOT / "skill-server" / "build" / "skillscale_skill_server"
 
-app = FastAPI(title="SkillScale Management", version="1.0.0")
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "skills"))
+
+app = FastAPI(title="SkillScale", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,7 +42,69 @@ app.add_middleware(
 )
 
 
-# ── State tracking ──
+# ══════════════════════════════════════════════════════════
+#  Tracing infrastructure
+# ══════════════════════════════════════════════════════════
+@dataclass
+class TraceSpan:
+    name: str
+    phase: str          # routing | zmq | skill_server | skill_exec
+    start_ms: float = 0
+    end_ms: float = 0
+    duration_ms: float = 0
+    details: dict = field(default_factory=dict)
+
+    def finish(self, extra: dict | None = None):
+        self.end_ms = time.time() * 1000
+        self.duration_ms = round(self.end_ms - self.start_ms, 2)
+        if extra:
+            self.details.update(extra)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "phase": self.phase,
+            "start_ms": self.start_ms,
+            "end_ms": self.end_ms,
+            "duration_ms": self.duration_ms,
+            "details": self.details,
+        }
+
+
+@dataclass
+class ChatTrace:
+    trace_id: str
+    message: str
+    topic: str = ""
+    result: str = ""
+    status: str = "pending"
+    total_ms: float = 0
+    created_at: float = field(default_factory=time.time)
+    spans: list = field(default_factory=list)
+
+    def add_span(self, span: TraceSpan):
+        self.spans.append(span)
+
+    def to_dict(self) -> dict:
+        return {
+            "trace_id": self.trace_id,
+            "message": self.message[:200],
+            "topic": self.topic,
+            "result": self.result[:500] if self.result else "",
+            "status": self.status,
+            "total_ms": self.total_ms,
+            "created_at": self.created_at,
+            "spans": [s.to_dict() for s in self.spans],
+        }
+
+
+_traces: list[ChatTrace] = []
+MAX_TRACES = 100
+
+
+# ══════════════════════════════════════════════════════════
+#  Service management state
+# ══════════════════════════════════════════════════════════
 @dataclass
 class ServiceInfo:
     name: str
@@ -59,7 +121,13 @@ class ServiceInfo:
 services: dict[str, ServiceInfo] = {}
 
 
-# ── Helpers ──
+# ══════════════════════════════════════════════════════════
+#  Chat agent state
+# ══════════════════════════════════════════════════════════
+_agent = None
+_discovery = None
+_agent_lock = asyncio.Lock()
+
 
 def _detect_python() -> str:
     for candidate in [PROJECT_ROOT / ".venv" / "bin" / "python3",
@@ -69,6 +137,97 @@ def _detect_python() -> str:
     return "python3"
 
 
+# ── LLM Router with tracing ──
+ROUTER_SYSTEM_PROMPT = """\
+You are a routing classifier for a distributed skill system.
+
+You will be given:
+1. A list of available topics with their descriptions and skills.
+2. A user intent (task description).
+
+Your job is to decide which TOPIC the intent should be routed to.
+
+Rules:
+- Reply with ONLY the topic name (e.g., TOPIC_DATA_PROCESSING).
+- Do NOT include any explanation, punctuation, or extra text.
+- Choose the single best-matching topic based on the intent.
+"""
+
+
+def route_to_topic_llm(user_intent, topics, metadata_summary):
+    """Route intent to topic via LLM; returns (topic, TraceSpan)."""
+    from llm_utils import chat as llm_chat
+
+    topic_names = [tm.topic for tm in topics]
+    user_msg = (
+        f"Available topics and skills:\n{metadata_summary}\n\n"
+        f"Valid topic names: {', '.join(topic_names)}\n\n"
+        f"User intent: {user_intent}\n\n"
+        f"Which topic should this intent be routed to? "
+        f"Reply with ONLY the topic name."
+    )
+
+    span = TraceSpan(
+        name="LLM Topic Routing",
+        phase="routing",
+        start_ms=time.time() * 1000,
+        details={
+            "system_prompt": ROUTER_SYSTEM_PROMPT[:300],
+            "user_prompt": user_msg,
+            "available_topics": topic_names,
+        },
+    )
+
+    try:
+        reply = llm_chat(
+            ROUTER_SYSTEM_PROMPT,
+            user_msg,
+            max_tokens=1024,
+            temperature=0.0,
+        ).strip()
+
+        chosen = topic_names[0] if topic_names else ""
+        for tn in topic_names:
+            if tn in reply:
+                chosen = tn
+                break
+
+        span.finish({"llm_raw_response": reply, "chosen_topic": chosen})
+        return chosen, span
+
+    except Exception as e:
+        span.finish({"error": str(e)})
+        return topic_names[0] if topic_names else "", span
+
+
+def _get_discovery():
+    global _discovery
+    if _discovery is None:
+        from skillscale.discovery import SkillDiscovery
+        _discovery = SkillDiscovery(
+            skills_root=str(SKILLS_DIR),
+            topic_descriptions={
+                "TOPIC_DATA_PROCESSING": "Data processing and analysis skills",
+                "TOPIC_CODE_ANALYSIS": "Code analysis and review skills",
+            },
+        ).scan()
+    return _discovery
+
+
+async def _get_agent():
+    global _agent
+    async with _agent_lock:
+        if _agent is None:
+            from agent.main import SkillScaleAgent, AgentConfig
+            config = AgentConfig.from_env()
+            _agent = SkillScaleAgent(config)
+            await _agent.start()
+        return _agent
+
+
+# ══════════════════════════════════════════════════════════
+#  Helpers (management)
+# ══════════════════════════════════════════════════════════
 def _scan_skills_folder(folder: Path) -> dict:
     skills = []
     agents_md = folder / "AGENTS.md"
@@ -117,13 +276,13 @@ def _scan_skills_folder(folder: Path) -> dict:
     }
 
 
-def _is_process_alive(proc: Optional[subprocess.Popen]) -> bool:
+def _is_process_alive(proc):
     if proc is None:
         return False
     return proc.poll() is None
 
 
-def _update_service_status(svc: ServiceInfo):
+def _update_service_status(svc):
     if svc.process and _is_process_alive(svc.process):
         svc.status = "running"
         svc.pid = svc.process.pid
@@ -132,8 +291,9 @@ def _update_service_status(svc: ServiceInfo):
         svc.pid = None
 
 
-# ── API Models ──
-
+# ══════════════════════════════════════════════════════════
+#  API Models
+# ══════════════════════════════════════════════════════════
 class LaunchRequest(BaseModel):
     topic: str
     skills_dir: str
@@ -148,8 +308,15 @@ class LaunchProxyRequest(BaseModel):
     xpub_port: int = 5555
 
 
-# ── API Routes ──
+class ChatRequest(BaseModel):
+    message: str
+    topic: Optional[str] = None
+    timeout: float = 180.0
 
+
+# ══════════════════════════════════════════════════════════
+#  Management API Routes
+# ══════════════════════════════════════════════════════════
 @app.get("/api/skills")
 def list_skill_folders():
     folders = []
@@ -355,7 +522,8 @@ async def stream_logs(name: str):
 def launch_all():
     results = []
 
-    if "proxy" not in services or services.get("proxy", ServiceInfo("")).status != "running":
+    proxy_info = services.get("proxy")
+    if proxy_info is None or proxy_info.status != "running":
         try:
             proxy_result = launch_proxy()
             results.append({"service": "proxy", **proxy_result})
@@ -435,6 +603,245 @@ def get_config():
             f"{os.getenv('LLM_PROVIDER', 'azure').upper()}_MODEL", "unknown"
         ),
     }
+
+
+# ══════════════════════════════════════════════════════════
+#  Chat API with Tracing
+# ══════════════════════════════════════════════════════════
+@app.post("/api/chat")
+async def chat_endpoint(req: ChatRequest):
+    """Send a message through the pipeline with full tracing."""
+    trace = ChatTrace(
+        trace_id=uuid.uuid4().hex[:12],
+        message=req.message,
+    )
+    overall_start = time.time()
+
+    # 1. Discovery
+    discovery = _get_discovery()
+    topics = discovery.list_topic_metadata()
+    if not topics:
+        raise HTTPException(503, "No topics discovered. Are skills installed?")
+
+    # 2. Topic routing (with trace)
+    if req.topic:
+        topic = req.topic
+        routing_span = TraceSpan(
+            name="Manual Topic Selection",
+            phase="routing",
+            start_ms=time.time() * 1000,
+            details={"manual_topic": topic, "routed_by": "manual"},
+        )
+        routing_span.finish()
+    else:
+        topic, routing_span = route_to_topic_llm(
+            req.message, topics, discovery.metadata_summary()
+        )
+
+    trace.topic = topic
+    trace.add_span(routing_span)
+
+    # 3. ZMQ publish (with trace)
+    zmq_span = TraceSpan(
+        name="ZeroMQ Publish & Await",
+        phase="zmq",
+        start_ms=time.time() * 1000,
+        details={
+            "topic": topic,
+            "proxy_xsub": "tcp://127.0.0.1:5444",
+            "proxy_xpub": "tcp://127.0.0.1:5555",
+            "message_size_bytes": len(req.message.encode()),
+        },
+    )
+
+    agent = await _get_agent()
+    try:
+        result = await agent.publish(topic, req.message, timeout=req.timeout)
+        zmq_span.finish({
+            "status": "success",
+            "response_size_bytes": len(result.encode()) if result else 0,
+        })
+    except asyncio.TimeoutError:
+        zmq_span.finish({"status": "timeout"})
+        trace.status = "error"
+        trace.result = f"Timeout: {topic} did not respond within {req.timeout}s"
+        trace.total_ms = round((time.time() - overall_start) * 1000, 1)
+        trace.add_span(zmq_span)
+        _traces.insert(0, trace)
+        if len(_traces) > MAX_TRACES:
+            _traces.pop()
+        raise HTTPException(504, trace.result)
+    except RuntimeError as e:
+        zmq_span.finish({"status": "error", "error": str(e)})
+        trace.status = "error"
+        trace.result = str(e)
+        trace.total_ms = round((time.time() - overall_start) * 1000, 1)
+        trace.add_span(zmq_span)
+        _traces.insert(0, trace)
+        if len(_traces) > MAX_TRACES:
+            _traces.pop()
+        raise HTTPException(502, f"Skill server error: {e}")
+
+    trace.add_span(zmq_span)
+
+    # 4. Parse C++ server logs for skill_server and skill_exec spans
+    try:
+        server_spans = _parse_server_logs_for_topic(topic)
+        for sp in server_spans:
+            trace.add_span(sp)
+    except Exception:
+        pass
+
+    trace.result = result
+    trace.status = "success"
+    trace.total_ms = round((time.time() - overall_start) * 1000, 1)
+
+    _traces.insert(0, trace)
+    if len(_traces) > MAX_TRACES:
+        _traces.pop()
+
+    return {
+        "id": trace.trace_id,
+        "role": "assistant",
+        "message": result,
+        "topic": topic,
+        "elapsed_ms": trace.total_ms,
+        "routed_by": routing_span.details.get("routed_by", "llm"),
+        "trace_id": trace.trace_id,
+    }
+
+
+def _parse_server_logs_for_topic(topic: str) -> list[TraceSpan]:
+    """Parse the most recent request block from C++ skill server logs."""
+    spans = []
+
+    for name, svc in services.items():
+        if not svc.log_file or not Path(svc.log_file).exists():
+            continue
+        if not name.startswith("server-"):
+            continue
+
+        try:
+            lines = Path(svc.log_file).read_text().splitlines()
+        except Exception:
+            continue
+
+        # Get the last request block from recent lines
+        recent = lines[-80:]
+
+        # Find last "Processing request" line
+        proc_indices = [i for i, l in enumerate(recent) if "Processing request" in l]
+        if not proc_indices:
+            continue
+
+        idx = proc_indices[-1]
+        block = recent[idx:]
+
+        worker_details = {"server": name, "raw_logs": []}
+        exec_details = {"server": name}
+        exec_ms = 0
+
+        for line in block:
+            stripped = line.strip()
+            worker_details["raw_logs"].append(stripped)
+
+            if "Processing request" in line:
+                worker_details["request_received"] = stripped
+            if "Mode 2" in line or "Mode 1" in line:
+                worker_details["matching_mode"] = stripped
+            if "Fallback" in line or "single skill" in line:
+                worker_details["fallback"] = stripped
+            if "Progressive disclosure" in line:
+                worker_details["progressive_disclosure"] = stripped
+            if "Executing skill:" in line:
+                exec_details["skill_name"] = line.split("Executing skill:")[1].strip()
+            if "Intent:" in line and "executor" in line:
+                exec_details["intent_preview"] = line.split("Intent:")[1].strip()
+            if "Found scripts/run" in line:
+                exec_details["execution_method"] = stripped
+            if "Finished" in line and "exit=" in line:
+                exec_details["finish_info"] = stripped
+                m = re.search(r"(\d+)ms", line)
+                if m:
+                    exec_ms = int(m.group(1))
+                    exec_details["execution_time_ms"] = exec_ms
+                m2 = re.search(r"exit=(\d+)", line)
+                if m2:
+                    exec_details["exit_code"] = int(m2.group(1))
+            if "Published response" in line:
+                exec_details["response_published"] = stripped
+
+        spans.append(TraceSpan(
+            name=f"Skill Server ({name})",
+            phase="skill_server",
+            details=worker_details,
+        ))
+
+        skill_name = exec_details.get("skill_name", "unknown")
+        spans.append(TraceSpan(
+            name=f"Skill Execution ({skill_name})",
+            phase="skill_exec",
+            duration_ms=exec_ms,
+            details=exec_details,
+        ))
+
+    return spans
+
+
+@app.get("/api/topics")
+def list_topics():
+    discovery = _get_discovery()
+    return {
+        "topics": [
+            {
+                "topic": tm.topic,
+                "description": tm.description,
+                "skills": [{"name": s.name, "description": s.description} for s in tm.skills],
+            }
+            for tm in discovery.list_topic_metadata()
+        ]
+    }
+
+
+@app.post("/api/discovery/refresh")
+def refresh_discovery():
+    global _discovery
+    _discovery = None
+    discovery = _get_discovery()
+    return {
+        "topics": discovery.list_topics(),
+        "total_skills": len(discovery.list_skills()),
+    }
+
+
+@app.get("/api/traces")
+def list_traces():
+    return {"traces": [t.to_dict() for t in _traces]}
+
+
+@app.get("/api/traces/{trace_id}")
+def get_trace(trace_id: str):
+    for t in _traces:
+        if t.trace_id == trace_id:
+            return t.to_dict()
+    raise HTTPException(404, "Trace not found")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _agent
+    if _agent:
+        await _agent.stop()
+        _agent = None
+
+    for name in list(services.keys()):
+        svc = services[name]
+        if svc.process and _is_process_alive(svc.process):
+            svc.process.terminate()
+            try:
+                svc.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                svc.process.kill()
 
 
 if __name__ == "__main__":
