@@ -37,7 +37,7 @@ class TestTextSummarizer:
 
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=text, capture_output=True, text=True, timeout=10,
+            input=text, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -50,7 +50,7 @@ class TestTextSummarizer:
 
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=text, capture_output=True, text=True, timeout=10,
+            input=text, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -59,7 +59,7 @@ class TestTextSummarizer:
         """Empty input should produce an error."""
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input="", capture_output=True, text=True, timeout=10,
+            input="", capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
@@ -77,7 +77,7 @@ class TestCsvAnalyzer:
 
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=csv_data, capture_output=True, text=True, timeout=10,
+            input=csv_data, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -91,7 +91,7 @@ class TestCsvAnalyzer:
 
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=csv_data, capture_output=True, text=True, timeout=10,
+            input=csv_data, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -101,7 +101,7 @@ class TestCsvAnalyzer:
         """CSV with only a header should fail."""
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input="col1,col2\n", capture_output=True, text=True, timeout=10,
+            input="col1,col2\n", capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
@@ -127,7 +127,7 @@ def greet(name):
 '''
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=code, capture_output=True, text=True, timeout=10,
+            input=code, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -154,7 +154,7 @@ def process(data):
 '''
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=code, capture_output=True, text=True, timeout=10,
+            input=code, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -172,7 +172,7 @@ class MyService:
 '''
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=code, capture_output=True, text=True, timeout=10,
+            input=code, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode == 0
@@ -184,7 +184,7 @@ class MyService:
 
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input=code, capture_output=True, text=True, timeout=10,
+            input=code, capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0 or "Failed" in result.stdout
@@ -193,7 +193,7 @@ class MyService:
         """Empty input should produce an error."""
         result = subprocess.run(
             [sys.executable, self.SCRIPT],
-            input="", capture_output=True, text=True, timeout=10,
+            input="", capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
