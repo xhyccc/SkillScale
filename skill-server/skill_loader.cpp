@@ -159,16 +159,13 @@ bool SkillLoader::load_skill_details(SkillDefinition& skill) {
     std::cout << "[loader] Progressive disclosure: loading SKILL.md for '"
               << skill.name << "'\n";
 
-    // ── Strategy 1: Try `openskills read <name>` CLI (OpenSkills protocol) ──
+    // ── Strategy 1: Try `npx openskills read <name>` (npm OpenSkills CLI) ──
     std::string cli_output;
-    // Use local openskills script; set SKILLSCALE_SKILLS_DIR for skill lookup
-    std::string cmd = "SKILLSCALE_SKILLS_DIR=\"" + skills_dir_ + "\" "
-                      + skills_dir_ + "/../scripts/openskills read "
-                      + skill.name + " 2>/dev/null";
+    std::string cmd = "npx openskills read " + skill.name + " 2>/dev/null";
     int rc = run_command(cmd, cli_output);
 
     if (rc == 0 && !cli_output.empty()) {
-        std::cout << "[loader] Loaded via openskills CLI (" << cli_output.size()
+        std::cout << "[loader] Loaded via npx openskills read (" << cli_output.size()
                   << " bytes)\n";
         skill.instructions = cli_output;
         skill.details_loaded = true;

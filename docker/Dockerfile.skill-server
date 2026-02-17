@@ -30,10 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash coreutils \
     && rm -rf /var/lib/apt/lists/*
 
+# Install npm openskills CLI globally
+RUN npm install -g openskills
+
 COPY --from=builder /build/build/skillscale_skill_server /usr/local/bin/skillscale_skill_server
 
 # Default skills directory inside the container
-RUN mkdir -p /skills
+RUN mkdir -p /skills /app/.claude/skills
 
 ENV SKILLSCALE_TOPIC=TOPIC_DEFAULT
 ENV SKILLSCALE_SKILLS_DIR=/skills

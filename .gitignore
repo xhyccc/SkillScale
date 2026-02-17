@@ -30,3 +30,8 @@ nohup.out
 # Node.js
 node_modules/
 dist/
+package-lock.json
+
+# OpenSkills (installed skills are copies — originals in skills/)
+.claude/
+.agent/

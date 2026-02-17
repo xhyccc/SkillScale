@@ -42,15 +42,14 @@ ExecutionResult SkillExecutor::execute(const SkillDefinition& skill,
         return run_subprocess(cmd, skill.base_dir, intent);
     }
 
-    // ── Strategy 3: Use OpenSkills CLI to read the skill ──
-    std::string cmd = "SKILLSCALE_SKILLS_DIR=\"" + skill.base_dir + "/..\" "
-                      + skill.base_dir + "/../../scripts/openskills read " + skill.name;
-    std::cout << "[executor] Using OpenSkills CLI: " << cmd << "\n";
+    // ── Strategy 3: Use npm OpenSkills CLI to read the skill ──
+    std::string cmd = "npx openskills read " + skill.name;
+    std::cout << "[executor] Using npx openskills read: " << cmd << "\n";
     auto result = run_subprocess(cmd, skill.base_dir, intent);
 
-    // If openskills CLI not available, fall back to cat the markdown
-    if (!result.success && result.exit_code == 127) {
-        std::cout << "[executor] openskills CLI not found, returning raw instructions\n";
+    // If npx/openskills not available, fall back to raw instructions
+    if (!result.success && (result.exit_code == 127 || result.exit_code == 1)) {
+        std::cout << "[executor] npx openskills not available, returning raw instructions\n";
         result.success = true;
         result.exit_code = 0;
         result.stdout_output = skill.instructions;

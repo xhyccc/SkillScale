@@ -22,7 +22,7 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Skill Server: data-processing topic (C++ + OpenSkills CLI) ──
+  # ── Skill Server: data-processing topic (C++ + npm OpenSkills CLI) ──
   skill-server-data:
     build:
       context: .
@@ -48,14 +48,14 @@ services:
     volumes:
       - ./skills/data-processing:/skills:ro
       - ./skills/llm_utils.py:/app/skills/llm_utils.py:ro
-      - ./scripts/openskills:/app/scripts/openskills:ro
+      - ./.claude/skills:/app/.claude/skills:ro
       - ./.env:/app/.env:ro
     depends_on:
       proxy:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Skill Server: code-analysis topic (C++ + OpenSkills CLI) ──
+  # ── Skill Server: code-analysis topic (C++ + npm OpenSkills CLI) ──
   skill-server-code:
     build:
       context: .
@@ -81,7 +81,7 @@ services:
     volumes:
       - ./skills/code-analysis:/skills:ro
       - ./skills/llm_utils.py:/app/skills/llm_utils.py:ro
-      - ./scripts/openskills:/app/scripts/openskills:ro
+      - ./.claude/skills:/app/.claude/skills:ro
       - ./.env:/app/.env:ro
     depends_on:
       proxy:
