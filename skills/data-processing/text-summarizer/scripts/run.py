@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Text Summarizer — Extractive summarization using word frequency scoring.
+Text Summarizer — LLM-powered summarization with basic stats.
 Reads intent from SKILLSCALE_INTENT env var or stdin.
 Outputs markdown summary to stdout.
 """
@@ -8,60 +8,46 @@ Outputs markdown summary to stdout.
 import os
 import re
 import sys
-from collections import Counter
 
-STOPWORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
-    "be", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can", "it", "its",
-    "this", "that", "these", "those", "i", "you", "he", "she", "we",
-    "they", "me", "him", "her", "us", "them", "my", "your", "his",
-    "our", "their", "not", "no", "so", "if", "then", "than", "also",
-    "just", "about", "more", "very", "all", "any", "each", "every",
-    "both", "few", "many", "much", "some", "such", "only", "own",
-    "same", "other", "into", "over", "after", "before", "between",
-})
+# Add skills/ to path so llm_utils is importable
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from llm_utils import chat
+
+SYSTEM_PROMPT = """\
+You are an expert text summarizer. Given a piece of text, produce a structured
+markdown summary with the following sections:
+
+## Summary
+
+### Key Themes
+- List 2-4 key themes or topics covered
+
+### Main Points
+- List the 3-5 most important points, each in one sentence
+
+### Abstract
+Write a single concise paragraph (3-4 sentences) summarizing the entire text.
+
+---
+*Summarized by SkillScale text-summarizer (LLM-powered)*
+
+Be concise and factual. Do not add information not present in the original text.
+"""
 
 
-def split_sentences(text: str) -> list[str]:
-    """Split text into sentences using regex."""
+def count_stats(text: str) -> dict:
+    """Basic text statistics."""
+    words = text.split()
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s.strip() for s in sentences if len(s.strip()) > 10]
-
-
-def word_frequencies(text: str) -> Counter:
-    """Compute word frequency counts, excluding stopwords."""
-    words = re.findall(r'\b[a-z]+\b', text.lower())
-    return Counter(w for w in words if w not in STOPWORDS and len(w) > 2)
-
-
-def summarize(text: str, num_sentences: int = 3) -> str:
-    """Extract the top N most important sentences."""
-    sentences = split_sentences(text)
-    if len(sentences) <= num_sentences:
-        return text
-
-    freq = word_frequencies(text)
-    if not freq:
-        return "\n".join(sentences[:num_sentences])
-
-    # Score each sentence
-    scores = []
-    for i, sent in enumerate(sentences):
-        words = re.findall(r'\b[a-z]+\b', sent.lower())
-        score = sum(freq.get(w, 0) for w in words)
-        scores.append((score, i, sent))
-
-    # Take top N by score, return in original order
-    top = sorted(scores, key=lambda x: x[0], reverse=True)[:num_sentences]
-    top_ordered = sorted(top, key=lambda x: x[1])
-
-    return "\n\n".join(s[2] for s in top_ordered)
+    sentences = [s for s in sentences if len(s.strip()) > 5]
+    return {
+        "chars": len(text),
+        "words": len(words),
+        "sentences": len(sentences),
+    }
 
 
 def main():
-    # Read input from env var or stdin
     text = os.environ.get("SKILLSCALE_INTENT", "")
     if not text:
         text = sys.stdin.read()
@@ -74,13 +60,27 @@ def main():
         print("**Error:** Input exceeds 100,000 character limit.", file=sys.stderr)
         sys.exit(1)
 
-    summary = summarize(text)
+    stats = count_stats(text)
 
-    # Output as markdown
-    print("## Summary\n")
-    print(summary)
-    print(f"\n---\n*Extracted {len(split_sentences(summary))} key sentences "
-          f"from {len(split_sentences(text))} total.*")
+    # Truncate for LLM context if very long
+    llm_input = text[:8000] if len(text) > 8000 else text
+
+    try:
+        result = chat(SYSTEM_PROMPT, llm_input, max_tokens=1024, temperature=0.3)
+        print(result)
+        print(f"\n*Input: {stats['words']} words, {stats['sentences']} sentences.*")
+    except Exception as e:
+        # Fallback: simple extractive summary if LLM fails
+        print(f"## Summary\n", file=sys.stderr)
+        print(f"*LLM unavailable ({e}), falling back to extractive summary.*",
+              file=sys.stderr)
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = [s for s in sentences if len(s.strip()) > 10]
+        top = sentences[:3] if len(sentences) > 3 else sentences
+        print("## Summary\n")
+        print("\n\n".join(top))
+        print(f"\n---\n*Extracted {len(top)} key sentences "
+              f"(LLM fallback mode).*")
 
 
 if __name__ == "__main__":

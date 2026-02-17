@@ -1,9 +1,6 @@
 ---
 name: dead-code-detector
-description: Detects dead code in Python source including unused imports, unused variables, unreachable code after return/raise/break/continue, and empty function bodies. Reports issues with line numbers.
-license: MIT
-compatibility: python3
-allowed-tools: python3 ast
+description: Detects dead code in Python source using AST analysis and LLM-powered review. Finds unused imports, unused variables, unreachable code, and empty functions, then provides intelligent cleanup suggestions via LLM.
 ---
 
 # Dead Code Detector Skill

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-CSV Analyzer — Statistical summary of CSV data using only stdlib.
+CSV Analyzer — Statistical analysis + LLM-powered insights.
 Reads from SKILLSCALE_INTENT env var or stdin.
-Outputs markdown-formatted statistics to stdout.
+Outputs markdown-formatted analysis to stdout.
 """
 
 import csv
@@ -13,13 +13,34 @@ import sys
 from collections import Counter
 from statistics import mean, median
 
+# Add skills/ to path so llm_utils is importable
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from llm_utils import chat
+
+SYSTEM_PROMPT = """\
+You are a data analyst. You are given columnar statistics from a CSV dataset.
+Produce a concise markdown analysis with:
+
+## Data Insights
+
+### Patterns
+- List 2-3 notable patterns or correlations in the data
+
+### Observations
+- List 2-3 key observations about the distributions or values
+
+### Recommendations
+- Suggest 1-2 follow-up analyses or things to investigate
+
+Be concise and data-driven. Only mention what the statistics support.
+End with: *Analysis by SkillScale csv-analyzer (LLM-powered)*
+"""
+
 
 def infer_type(values: list[str]) -> str:
     """Infer column type from sample values."""
     numeric_count = 0
-    date_pattern = re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}')
-
-    for v in values[:100]:  # sample first 100
+    for v in values[:100]:
         v = v.strip()
         if not v:
             continue
@@ -27,10 +48,9 @@ def infer_type(values: list[str]) -> str:
             float(v.replace(",", ""))
             numeric_count += 1
         except ValueError:
-            if date_pattern.match(v):
-                return "date"
-
-    if numeric_count > len([v for v in values[:100] if v.strip()]) * 0.8:
+            pass
+    non_empty = [v for v in values[:100] if v.strip()]
+    if non_empty and numeric_count > len(non_empty) * 0.8:
         return "numeric"
     return "text"
 
@@ -66,11 +86,39 @@ def analyze_column(name: str, values: list[str]) -> dict:
         stats["unique"] = len(counter)
         if counter:
             most_common = counter.most_common(1)[0]
-            stats["most_common"] = f"{most_common[0]} ({most_common[1]}×)"
+            stats["most_common"] = f"{most_common[0]} ({most_common[1]}x)"
         else:
             stats["most_common"] = "N/A"
 
     return stats
+
+
+def format_stats_markdown(results: list[dict], num_rows: int, num_cols: int) -> str:
+    """Format column stats as markdown tables."""
+    lines = [f"## CSV Analysis\n"]
+    lines.append(f"**Rows:** {num_rows} | **Columns:** {num_cols}\n")
+
+    numeric_cols = [r for r in results if r["type"] == "numeric"]
+    if numeric_cols:
+        lines.append("### Numeric Columns\n")
+        lines.append("| Column | Count | Min | Max | Mean | Median |")
+        lines.append("|--------|-------|-----|-----|------|--------|")
+        for r in numeric_cols:
+            lines.append(f"| {r['name']} | {r['count']} | {r['min']} | "
+                         f"{r['max']} | {r['mean']} | {r['median']} |")
+        lines.append("")
+
+    text_cols = [r for r in results if r["type"] != "numeric"]
+    if text_cols:
+        lines.append("### Text Columns\n")
+        lines.append("| Column | Type | Count | Unique | Most Common |")
+        lines.append("|--------|------|-------|--------|-------------|")
+        for r in text_cols:
+            lines.append(f"| {r['name']} | {r['type']} | {r['count']} | "
+                         f"{r.get('unique', 'N/A')} | {r.get('most_common', 'N/A')} |")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def main():
@@ -90,10 +138,6 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    if len(rows) > 50_001:
-        print("**Error:** CSV exceeds 50,000 row limit.", file=sys.stderr)
-        sys.exit(1)
-
     headers = rows[0]
     data_rows = rows[1:]
 
@@ -106,33 +150,25 @@ def main():
     # Analyze each column
     results = [analyze_column(h, columns[h]) for h in headers]
 
-    # Output markdown
-    print(f"## CSV Analysis\n")
-    print(f"**Rows:** {len(data_rows)} | **Columns:** {len(headers)}\n")
+    # Format basic stats
+    stats_md = format_stats_markdown(results, len(data_rows), len(headers))
+    print(stats_md)
 
-    # Numeric columns table
-    numeric_cols = [r for r in results if r["type"] == "numeric"]
-    if numeric_cols:
-        print("### Numeric Columns\n")
-        print("| Column | Count | Min | Max | Mean | Median |")
-        print("|--------|-------|-----|-----|------|--------|")
-        for r in numeric_cols:
-            print(f"| {r['name']} | {r['count']} | {r['min']} | "
-                  f"{r['max']} | {r['mean']} | {r['median']} |")
-        print()
+    # LLM insights
+    try:
+        llm_input = stats_md
+        # Also include first few rows for context
+        sample_rows = "\n".join(
+            ",".join(row) for row in rows[:min(6, len(rows))]
+        )
+        llm_input += f"\n### Sample Data (first rows)\n```\n{sample_rows}\n```"
 
-    # Text columns table
-    text_cols = [r for r in results if r["type"] != "numeric"]
-    if text_cols:
-        print("### Text/Date Columns\n")
-        print("| Column | Type | Count | Unique | Most Common |")
-        print("|--------|------|-------|--------|-------------|")
-        for r in text_cols:
-            print(f"| {r['name']} | {r['type']} | {r['count']} | "
-                  f"{r.get('unique', 'N/A')} | {r.get('most_common', 'N/A')} |")
-        print()
+        insights = chat(SYSTEM_PROMPT, llm_input, max_tokens=512, temperature=0.3)
+        print(insights)
+    except Exception as e:
+        print(f"\n---\n*LLM insights unavailable: {e}*")
 
-    print(f"---\n*Analyzed {len(data_rows)} rows × {len(headers)} columns.*")
+    print(f"\n---\n*Analyzed {len(data_rows)} rows x {len(headers)} columns.*")
 
 
 if __name__ == "__main__":

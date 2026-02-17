@@ -238,7 +238,7 @@ def main():
     print(f"**Lines analyzed:** {total_lines} | **Issues found:** {len(issues)}\n")
 
     if not issues:
-        print("✅ No dead code detected.\n")
+        print("No dead code detected.\n")
     else:
         # Summary by kind
         from collections import Counter
@@ -255,23 +255,42 @@ def main():
                 summary_parts.append(f"{counts[kind]} {label}")
         print(f"**Summary:** {', '.join(summary_parts)}\n")
 
-        # Severity icons
-        KIND_ICON = {
-            "unused-import": "⚠️",
-            "unused-variable": "⚠️",
-            "unreachable": "🔴",
-            "empty-function": "💤",
-        }
-
         print("### Issues\n")
         print("| # | Line | Type | Description |")
         print("|---|------|------|-------------|")
         for i, issue in enumerate(issues, 1):
-            icon = KIND_ICON.get(issue.kind, "❓")
-            print(f"| {i} | {issue.line} | {icon} {issue.kind} | {issue.detail} |")
+            print(f"| {i} | {issue.line} | {issue.kind} | {issue.detail} |")
         print()
 
-    print(f"---\n*Scanned {total_lines} lines of Python source for dead code.*")
+    # LLM review for cleanup suggestions
+    try:
+        # Add skills/ to path so llm_utils is importable
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        from llm_utils import chat
+
+        LLM_PROMPT = (
+            "You are an expert Python code reviewer. You are given AST-detected "
+            "dead code issues and the source code. Provide a concise markdown section:\n\n"
+            "## Cleanup Suggestions\n\n"
+            "For each issue category, explain:\n"
+            "- Why these are problematic\n"
+            "- How to safely clean them up\n"
+            "- Any edge cases to watch for (e.g., imports used for type hints)\n\n"
+            "Keep it concise (3-6 bullet points). End with:\n"
+            "*Review by SkillScale dead-code-detector (LLM-powered)*"
+        )
+
+        issues_text = "\n".join(
+            f"- Line {i.line}: {i.kind} — {i.detail}" for i in issues
+        )
+        llm_input = (f"### Detected Issues\n{issues_text}\n\n"
+                     f"### Source Code\n```python\n{source[:4000]}\n```")
+        review = chat(LLM_PROMPT, llm_input, max_tokens=512, temperature=0.3)
+        print(review)
+    except Exception as e:
+        print(f"\n*LLM review unavailable: {e}*")
+
+    print(f"\n---\n*Scanned {total_lines} lines of Python source for dead code.*")
 
 
 if __name__ == "__main__":

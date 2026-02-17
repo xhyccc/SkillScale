@@ -1,13 +1,15 @@
 """
 End-to-end smoke test: Python agent → C++ Proxy → C++ Skill Server → skill execution → response.
 
-This test demonstrates the full middleware workflow:
+This test demonstrates the full LLM-powered middleware workflow:
   1. SkillDiscovery scans the skills/ directory to auto-discover topics, their
-     descriptions, and per-skill metadata.
-  2. A simple keyword router uses topic+skill descriptions to decide which
-     ZMQ topic to publish each user intent to.
+     descriptions, and per-skill metadata (OpenSkills SKILL.md format).
+  2. An LLM-based router uses the metadata_summary() as system-prompt context
+     to classify each user intent and route it to the correct ZMQ topic.
   3. Intents are sent as task-based (Mode 2) — the C++ skill server matches
      the best installed skill automatically.
+  4. Skill scripts call the LLM for intelligent analysis (summarization,
+     CSV insights, complexity review, dead-code suggestions).
 
 Two skill servers run:
   - TOPIC_DATA_PROCESSING  (text-summarizer, csv-analyzer)
@@ -23,90 +25,62 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from agent.main import SkillScaleAgent, AgentConfig
 from skillscale.discovery import SkillDiscovery, TopicMetadata
 
+# LLM utilities for routing
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "skills"))
+from llm_utils import chat as llm_chat, get_provider_info
+
 
 # ──────────────────────────────────────────────────────────
-#  Simple keyword-based topic router (simulates what an LLM
-#  agent would do using the auto-discovered descriptions)
+#  LLM-based topic router
 # ──────────────────────────────────────────────────────────
-def _simple_stem(word: str) -> str:
-    """Reduce a word to a crude stem by stripping common suffixes."""
-    for suffix in ("ization", "isation", "izing", "ising", "tion", "sion",
-                   "ment", "ness", "izes", "ises", "ized", "ised",
-                   "ize", "ise",
-                   "ling", "ting", "ing", "able", "ible",
-                   "ies", "ves", "ses", "ers", "ors",
-                   "ed", "ly", "es", "er", "or", "al", "s"):
-        if len(word) > len(suffix) + 2 and word.endswith(suffix):
-            return word[:-len(suffix)]
-    return word
+ROUTER_SYSTEM_PROMPT = """\
+You are a routing classifier for a distributed skill system.
+
+You will be given:
+1. A list of available topics with their descriptions and skills.
+2. A user intent (task description).
+
+Your job is to decide which TOPIC the intent should be routed to.
+
+Rules:
+- Reply with ONLY the topic name (e.g., TOPIC_DATA_PROCESSING).
+- Do NOT include any explanation, punctuation, or extra text.
+- Choose the single best-matching topic based on the intent.
+"""
 
 
-def _prefix_len(a: str, b: str) -> int:
-    """Return the length of the common prefix between two strings."""
-    n = 0
-    for ca, cb in zip(a, b):
-        if ca != cb:
-            break
-        n += 1
-    return n
-
-
-def route_to_topic(
+def route_to_topic_llm(
     user_intent: str,
     topics: list[TopicMetadata],
+    metadata_summary: str,
 ) -> str:
     """
-    Pick the best topic for a user intent using prefix-similarity
-    scoring against topic descriptions + skill names/descriptions.
-
-    Scoring considers *all* (intent-word, pool-word) pairs:
-      - Exact match            → +10  (handles short words like "csv")
-      - Common prefix ≥ 5 chars → +prefix_len  (morphological variants)
-
-    This naturally gives higher scores to topics whose descriptions
-    contain more words resembling the user intent.
-
-    In a real agent this would be an LLM call with the topic
-    descriptions injected into the system prompt.
+    Use the LLM to classify a user intent and route it to the
+    correct topic, using the auto-discovered metadata as context.
     """
-    import re
-    # Common / ambiguous words to ignore
-    stopwords = {
-        "the", "and", "for", "with", "from", "this", "that", "are", "was",
-        "has", "have", "been", "will", "can", "not", "but", "its", "per",
-        "all", "each", "any", "other", "into", "only", "also", "via",
-        "server", "reports", "about", "using", "based", "such",
-    }
+    topic_names = [tm.topic for tm in topics]
+    user_msg = (
+        f"Available topics and skills:\n{metadata_summary}\n\n"
+        f"Valid topic names: {', '.join(topic_names)}\n\n"
+        f"User intent: {user_intent}\n\n"
+        f"Which topic should this intent be routed to? "
+        f"Reply with ONLY the topic name."
+    )
 
-    intent_words = set(re.findall(r'[a-z]+', user_intent.lower())) - stopwords
-    intent_words = {w for w in intent_words if len(w) > 2}
+    reply = llm_chat(
+        ROUTER_SYSTEM_PROMPT,
+        user_msg,
+        max_tokens=50,
+        temperature=0.0,
+    ).strip()
 
-    best_topic = topics[0].topic if topics else "TOPIC_DEFAULT"
-    best_score = -1
+    # Sanitize: extract the topic name from the reply
+    for tn in topic_names:
+        if tn in reply:
+            return tn
 
-    for tm in topics:
-        # Build keyword pool from topic description + skill metadata
-        pool_text = tm.description + " " + tm.topic.replace("_", " ")
-        for skill in tm.skills:
-            pool_text += " " + skill.name.replace("-", " ")
-            pool_text += " " + skill.description
-        pool_words = set(re.findall(r'[a-z]+', pool_text.lower())) - stopwords
-        pool_words = {w for w in pool_words if len(w) > 2}
-
-        # Score every (intent-word, pool-word) pair
-        score = 0
-        for iw in intent_words:
-            for pw in pool_words:
-                if iw == pw:
-                    score += 10          # exact match
-                elif _prefix_len(iw, pw) >= 5:
-                    score += _prefix_len(iw, pw)  # morphological similarity
-
-        if score > best_score:
-            best_score = score
-            best_topic = tm.topic
-
-    return best_topic
+    # Fallback: return the raw reply (might still match)
+    return reply
 
 
 async def run_e2e_test():
@@ -128,7 +102,13 @@ async def run_e2e_test():
     print("\n" + "=" * 70)
     print("  SKILL DISCOVERY — auto-discovered topics and skills")
     print("=" * 70)
-    print(discovery.metadata_summary())
+    summary = discovery.metadata_summary()
+    print(summary)
+
+    # Show LLM provider info
+    info = get_provider_info()
+    print(f"  LLM Provider: {info['provider']} ({info['model']})")
+    print()
 
     topics = discovery.list_topic_metadata()
     assert len(topics) >= 2, f"Expected ≥2 topics, found {len(topics)}"
@@ -137,13 +117,13 @@ async def run_e2e_test():
     config = AgentConfig(
         proxy_xsub="tcp://127.0.0.1:5444",
         proxy_xpub="tcp://127.0.0.1:5555",
-        default_timeout=15.0,
+        default_timeout=30.0,
     )
     agent = SkillScaleAgent(config)
     await agent.start()
 
     print("=" * 70)
-    print("  E2E TEST: Agent auto-routes intents to topics via descriptions")
+    print("  E2E TEST: LLM-powered agent routes intents via skill descriptions")
     print("=" * 70)
 
     # ── Test cases: each has a user intent and an expected topic ──
@@ -229,14 +209,13 @@ async def run_e2e_test():
         print(f"\n[TEST {i}] {tc['name']}")
         intent_dict = tc["intent"]
 
-        # Step 1: Route — agent picks topic using auto-discovered descriptions
-        # Use the "task" field (or full intent text) for routing
+        # Step 1: LLM Route — agent uses metadata + LLM to pick topic
         routing_text = intent_dict.get("task", json.dumps(intent_dict))
-        chosen_topic = route_to_topic(routing_text, topics)
+        chosen_topic = route_to_topic_llm(routing_text, topics, summary)
         expected = tc["expected_topic"]
         route_ok = chosen_topic == expected
-        route_icon = "✅" if route_ok else "❌"
-        print(f"  {route_icon} Routed to: {chosen_topic}"
+        route_icon = "+" if route_ok else "FAIL"
+        print(f"  [{route_icon}] Routed to: {chosen_topic}"
               f"{'' if route_ok else f' (expected {expected})'}")
 
         if not route_ok:
@@ -248,17 +227,17 @@ async def run_e2e_test():
         try:
             result = await agent.publish(chosen_topic, task_payload)
             response = agent.respond(result)
-            print(f"  ✅ Response ({len(response)} chars):")
+            print(f"  [+] Response ({len(response)} chars):")
             for line in response.split("\n")[:6]:
                 print(f"     {line}")
             if response.count("\n") > 6:
                 print(f"     ... ({response.count(chr(10)) - 6} more lines)")
             passed += 1
         except asyncio.TimeoutError:
-            print("  ❌ TIMEOUT: No response from skill server")
+            print("  [FAIL] TIMEOUT: No response from skill server")
             failed += 1
         except Exception as e:
-            print(f"  ❌ ERROR: {e}")
+            print(f"  [FAIL] ERROR: {e}")
             failed += 1
 
     print("\n" + "=" * 70)

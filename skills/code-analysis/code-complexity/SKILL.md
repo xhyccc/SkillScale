@@ -1,9 +1,6 @@
 ---
 name: code-complexity
-description: Analyzes Python source code complexity by computing cyclomatic complexity, function lengths, nesting depth, and import analysis. Reports metrics per function and per file.
-license: MIT
-compatibility: python3
-allowed-tools: python3 ast
+description: Analyzes Python source code complexity using AST metrics and LLM-powered review. Computes cyclomatic complexity, nesting depth, and function length, then provides intelligent refactoring suggestions via LLM.
 ---
 
 # Code Complexity Analyzer Skill

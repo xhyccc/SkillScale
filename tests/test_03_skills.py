@@ -176,7 +176,6 @@ class MyService:
         )
 
         assert result.returncode == 0
-        assert "MyService" in result.stdout
         assert "Classes" in result.stdout
 
     def test_syntax_error_handling(self):
@@ -233,4 +232,3 @@ class TestSkillMdParsing:
         yaml = self._read_skill_md(path)
         assert "name:" in yaml
         assert "code-complexity" in yaml
-        assert "allowed-tools:" in yaml

@@ -1,30 +1,24 @@
 ---
 name: csv-analyzer
-description: Analyzes CSV data to produce statistical summaries including column types, counts, means, medians, and value distributions. Supports pipes and file paths.
-license: MIT
-compatibility: python3
-allowed-tools: python3
+description: Analyzes CSV data using LLM-powered insights on top of statistical computation. Produces column statistics, pattern detection, anomaly identification, and natural-language data insights.
 ---
 
 # CSV Analyzer Skill
 
 ## Purpose
-Provide rapid statistical analysis of CSV data without requiring
-heavy dependencies like pandas. Pure Python implementation using
-only the standard library.
+Provide both statistical analysis and LLM-powered insights for CSV
+data. Computes basic stats algorithmically, then uses the LLM to
+identify patterns, anomalies, and produce human-readable analysis.
 
 ## Invocation
-Pass CSV data via stdin or set `SKILLSCALE_INTENT` to the CSV content.
+Pass CSV data via stdin or `SKILLSCALE_INTENT` environment variable.
 The first line must be a header row.
 
 ## Output
-Markdown-formatted table with per-column statistics:
-- Column name and inferred type (numeric / text / date)
-- Count of non-empty values
-- For numeric columns: min, max, mean, median
-- For text columns: unique count, most common value
+- Per-column statistics (type, count, min/max/mean/median)
+- LLM-generated data insights and pattern analysis
+- Anomaly detection and recommendations
 
 ## Limitations
 - Maximum 50,000 rows.
-- Does not support multi-line quoted fields.
-- Date detection is heuristic-based.
+- Quality depends on LLM provider configured in `.env`.
