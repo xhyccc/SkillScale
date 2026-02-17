@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skillscale"
+version = "0.1.0"
+description = "Middleware SDK for the SkillScale distributed Skill-as-a-Service infrastructure"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "SkillScale Contributors"}]
+keywords = ["zeromq", "agent", "skills", "distributed", "middleware", "langchain", "langgraph"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pyzmq>=25.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2"]
+langgraph = ["langgraph>=0.1"]
+crewai = ["crewai>=0.30"]
+all = [
+    "langchain-core>=0.2",
+    "langgraph>=0.1",
+    "crewai>=0.30",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-timeout>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/xhyccc/SkillScale"
+Repository = "https://github.com/xhyccc/SkillScale"
+
+[tool.setuptools.packages.find]
+include = ["skillscale*"]

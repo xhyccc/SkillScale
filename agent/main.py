@@ -5,7 +5,7 @@ Lightweight async orchestrator with two tools:
   - publish(topic, intent)  → broadcasts to ZeroMQ skill servers
   - respond(content)        → returns markdown to the user
 
-Uses pyzmq async sockets with asyncio for fully non-blocking I/O.
+Uses the skillscale SDK middleware client under the hood.
 """
 
 import asyncio
@@ -13,13 +13,16 @@ import json
 import logging
 import os
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-import zmq
-import zmq.asyncio
+# Ensure the SDK is importable from repo root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from skillscale.client import SkillScaleClient, ClientConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +33,7 @@ log = logging.getLogger("skillscale-agent")
 
 
 # ──────────────────────────────────────────────────────────
-#  Configuration
+#  Configuration (wraps SDK ClientConfig)
 # ──────────────────────────────────────────────────────────
 @dataclass
 class AgentConfig:
@@ -49,167 +52,48 @@ class AgentConfig:
             default_timeout=float(os.getenv("SKILLSCALE_TIMEOUT", str(cls.default_timeout))),
         )
 
-
-# ──────────────────────────────────────────────────────────
-#  Pending request tracker
-# ──────────────────────────────────────────────────────────
-@dataclass
-class PendingRequest:
-    request_id: str
-    topic: str
-    intent: str
-    future: asyncio.Future
-    created_at: float = field(default_factory=time.time)
+    def to_client_config(self) -> ClientConfig:
+        return ClientConfig(
+            proxy_xsub=self.proxy_xsub,
+            proxy_xpub=self.proxy_xpub,
+            client_id=self.agent_id,
+            hwm=self.hwm,
+            default_timeout=self.default_timeout,
+            heartbeat_ivl=self.heartbeat_ivl,
+        )
 
 
 # ──────────────────────────────────────────────────────────
-#  Agent core
+#  Agent core — thin wrapper around SkillScaleClient
 # ──────────────────────────────────────────────────────────
 class SkillScaleAgent:
     """
-    Front-end agent with async ZeroMQ PUB/SUB and two tools:
-    publish() and respond().
+    Front-end agent with two tools: publish() and respond().
+    Delegates all ZMQ work to the SkillScaleClient middleware.
     """
 
     def __init__(self, config: Optional[AgentConfig] = None):
         self.config = config or AgentConfig.from_env()
-        self._ctx: Optional[zmq.asyncio.Context] = None
-        self._pub: Optional[zmq.asyncio.Socket] = None
-        self._sub: Optional[zmq.asyncio.Socket] = None
-        self._pending: Dict[str, PendingRequest] = {}
-        self._listener_task: Optional[asyncio.Task] = None
-        self._running = False
-        self._skill_metadata: Dict[str, Any] = {}  # topic → metadata
+        self._client = SkillScaleClient(self.config.to_client_config())
 
     # ── Lifecycle ──────────────────────────────────────────
 
     async def start(self):
-        """Initialize ZeroMQ sockets and start the background listener."""
-        log.info("Starting agent (id=%s)", self.config.agent_id)
-
-        self._ctx = zmq.asyncio.Context()
-
-        # PUB socket → connects to proxy XSUB (port 5444)
-        self._pub = self._ctx.socket(zmq.PUB)
-        self._pub.setsockopt(zmq.SNDHWM, self.config.hwm)
-        self._pub.setsockopt(zmq.LINGER, 1000)
-        self._pub.connect(self.config.proxy_xsub)
-
-        # SUB socket → connects to proxy XPUB (port 5555)
-        self._sub = self._ctx.socket(zmq.SUB)
-        self._sub.setsockopt(zmq.RCVHWM, self.config.hwm)
-        self._sub.setsockopt(zmq.TCP_KEEPALIVE, 1)
-        self._sub.setsockopt(zmq.HEARTBEAT_IVL, self.config.heartbeat_ivl)
-        self._sub.setsockopt(zmq.HEARTBEAT_TTL, self.config.heartbeat_ivl * 3)
-        self._sub.setsockopt(zmq.HEARTBEAT_TIMEOUT, self.config.heartbeat_ivl * 3)
-        self._sub.setsockopt(zmq.RECONNECT_IVL, 100)
-        self._sub.setsockopt(zmq.RECONNECT_IVL_MAX, 5000)
-        self._sub.connect(self.config.proxy_xpub)
-
-        # Subscribe to our unique reply topic
-        self._sub.setsockopt_string(zmq.SUBSCRIBE, self.config.agent_id)
-        log.info("Subscribed to reply topic: %s", self.config.agent_id)
-
-        # Late-joiner mitigation: wait for subscription propagation
-        await asyncio.sleep(0.5)
-
-        self._running = True
-        self._listener_task = asyncio.create_task(self._listener_loop())
-        log.info("Agent ready.")
+        await self._client.connect()
 
     async def stop(self):
-        """Clean shutdown."""
-        log.info("Shutting down agent...")
-        self._running = False
-
-        if self._listener_task:
-            self._listener_task.cancel()
-            try:
-                await self._listener_task
-            except asyncio.CancelledError:
-                pass
-
-        # Cancel all pending futures
-        for req in self._pending.values():
-            if not req.future.done():
-                req.future.cancel()
-        self._pending.clear()
-
-        if self._pub:
-            self._pub.close()
-        if self._sub:
-            self._sub.close()
-        if self._ctx:
-            self._ctx.term()
-
-        log.info("Agent shutdown complete.")
+        await self._client.close()
 
     # ── Tool 1: publish(topic, intent) ─────────────────────
 
     async def publish(self, topic: str, intent: str,
                       timeout: Optional[float] = None) -> str:
-        """
-        Broadcast an intent to a specific skill topic.
-
-        Returns the skill server's response content (markdown string).
-        Raises asyncio.TimeoutError if no response within timeout.
-        """
-        timeout = timeout or self.config.default_timeout
-        request_id = uuid.uuid4().hex
-
-        payload = json.dumps({
-            "request_id": request_id,
-            "reply_to": self.config.agent_id,
-            "intent": intent,
-            "timestamp": time.time(),
-        })
-
-        # Register pending future
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        self._pending[request_id] = PendingRequest(
-            request_id=request_id,
-            topic=topic,
-            intent=intent,
-            future=future,
-        )
-
-        # Send multipart: [topic, payload]
-        await self._pub.send_multipart([
-            topic.encode("utf-8"),
-            payload.encode("utf-8"),
-        ])
-        log.info("Published intent to %s (req=%s)", topic, request_id[:8])
-
-        # Wait for response with timeout
-        try:
-            result = await asyncio.wait_for(future, timeout=timeout)
-            return result
-        except asyncio.TimeoutError:
-            log.warning("Timeout waiting for response (req=%s, topic=%s)",
-                        request_id[:8], topic)
-            self._pending.pop(request_id, None)
-            raise
+        return await self._client.invoke(topic, intent, timeout)
 
     # ── Tool 2: respond(content) ───────────────────────────
 
     def respond(self, content: str) -> str:
-        """
-        Terminal action: return formatted markdown to the user.
-        Flushes session state and garbage-collects stale futures.
-        """
-        # GC stale pending requests (older than 2× default timeout)
-        cutoff = time.time() - (self.config.default_timeout * 2)
-        stale_ids = [
-            rid for rid, req in self._pending.items()
-            if req.created_at < cutoff
-        ]
-        for rid in stale_ids:
-            req = self._pending.pop(rid)
-            if not req.future.done():
-                req.future.cancel()
-            log.debug("GC'd stale request %s", rid[:8])
-
+        self._client.gc_stale()
         log.info("Responding with %d chars of markdown", len(content))
         return content
 
@@ -217,90 +101,11 @@ class SkillScaleAgent:
 
     async def publish_parallel(self, requests: list[tuple[str, str]],
                                 timeout: Optional[float] = None) -> list[str]:
-        """
-        Publish multiple intents in parallel and gather all responses.
-
-        Args:
-            requests: list of (topic, intent) tuples
-            timeout:  per-request timeout
-
-        Returns:
-            List of response strings (in same order as requests)
-        """
-        tasks = [self.publish(topic, intent, timeout) for topic, intent in requests]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        return await self._client.invoke_parallel(requests, timeout)
 
     async def publish_sequential(self, requests: list[tuple[str, str]],
                                   timeout: Optional[float] = None) -> list[str]:
-        """
-        Publish intents sequentially (each waits for the previous to complete).
-        """
-        results = []
-        for topic, intent in requests:
-            result = await self.publish(topic, intent, timeout)
-            results.append(result)
-        return results
-
-    # ── Background listener ────────────────────────────────
-
-    async def _listener_loop(self):
-        """
-        Continuously polls the SUB socket for incoming responses
-        and resolves the corresponding pending futures.
-        """
-        log.info("Listener loop started")
-        poller = zmq.asyncio.Poller()
-        poller.register(self._sub, zmq.POLLIN)
-
-        while self._running:
-            try:
-                events = await poller.poll(timeout=250)
-            except asyncio.CancelledError:
-                break
-
-            for sock, _ in events:
-                try:
-                    frames = await sock.recv_multipart(zmq.NOBLOCK)
-                    if len(frames) < 2:
-                        log.warning("Received malformed message (frames=%d)", len(frames))
-                        continue
-
-                    topic = frames[0].decode("utf-8")
-                    payload_str = frames[1].decode("utf-8")
-
-                    try:
-                        payload = json.loads(payload_str)
-                    except json.JSONDecodeError as e:
-                        log.error("Invalid JSON in response: %s", e)
-                        continue
-
-                    request_id = payload.get("request_id")
-                    status = payload.get("status", "unknown")
-                    content = payload.get("content", "")
-                    error = payload.get("error", "")
-
-                    log.info("Received response for req=%s status=%s",
-                             (request_id or "?")[:8], status)
-
-                    if request_id and request_id in self._pending:
-                        pending = self._pending.pop(request_id)
-                        if not pending.future.done():
-                            if status == "success":
-                                pending.future.set_result(content)
-                            else:
-                                pending.future.set_exception(
-                                    RuntimeError(f"Skill error: {error}")
-                                )
-                    else:
-                        log.warning("Received response for unknown request: %s",
-                                    (request_id or "?")[:8])
-
-                except zmq.Again:
-                    pass
-                except Exception as e:
-                    log.error("Listener error: %s", e, exc_info=True)
-
-        log.info("Listener loop stopped")
+        return await self._client.invoke_sequential(requests, timeout)
 
 
 # ──────────────────────────────────────────────────────────

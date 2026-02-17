@@ -36,11 +36,12 @@ class TestFaultTolerance:
 
     async def test_stale_future_gc(self, agent, mock_skill_server):
         """respond() garbage-collects expired pending requests."""
-        # Manually inject a stale pending request
-        from main import PendingRequest
+        # Manually inject a stale pending request into the SDK client
+        from skillscale.client import _PendingRequest
+        client = agent._client
         loop = asyncio.get_running_loop()
         fake_future = loop.create_future()
-        agent._pending["stale-id"] = PendingRequest(
+        client._pending["stale-id"] = _PendingRequest(
             request_id="stale-id",
             topic="TOPIC_STALE",
             intent="old request",
@@ -48,24 +49,24 @@ class TestFaultTolerance:
             created_at=time.time() - 999,  # very old
         )
 
-        assert "stale-id" in agent._pending
+        assert "stale-id" in client._pending
 
-        # respond() should clean it up
+        # respond() should clean it up via gc_stale()
         agent.respond("some content")
 
-        assert "stale-id" not in agent._pending
+        assert "stale-id" not in client._pending
         assert fake_future.cancelled()
 
     async def test_multiple_timeouts_dont_leak(self, agent):
         """Multiple timeouts don't accumulate pending requests."""
-        initial_pending = len(agent._pending)
+        initial_pending = agent._client.pending_count
 
         for _ in range(5):
             with pytest.raises(asyncio.TimeoutError):
                 await agent.publish("TOPIC_NOWHERE", "test", timeout=0.3)
 
         # All timed-out requests should have been cleaned up
-        assert len(agent._pending) == initial_pending
+        assert agent._client.pending_count == initial_pending
 
     async def test_rapid_fire_messages(self, agent, mock_skill_server):
         """Agent handles a burst of rapid-fire requests."""

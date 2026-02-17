@@ -1,34 +1,42 @@
 # SkillScale — Distributed Skill-as-a-Service Agent Infrastructure
 
-A massively scalable, ZeroMQ-based distributed system where specialized C++ Skill Servers
-execute [OpenSkills](https://github.com/anthropics/openskills) on behalf of a lightweight
-Python front-end agent orchestrator. Skills are defined as portable `SKILL.md` files with
-YAML frontmatter and are executed as isolated subprocesses — no mocks, no stubs.
+A middleware SDK and distributed infrastructure for executing AI agent skills at scale.
+Specialized C++ Skill Servers execute [OpenSkills](https://github.com/anthropics/openskills)
+over a ZeroMQ pub/sub bus. Any agent framework — **LangChain, LangGraph, CrewAI**, or your
+own — plugs into the middleware through thin adapters. No mocks, no stubs.
 
 ## Architecture
 
 ```
-                           ┌─────────────────────┐
-                           │   ZeroMQ XPUB/XSUB  │
-                           │   Proxy (C++)        │
-                           │                      │
- ┌──────────────┐   PUB    │  XSUB :5444          │   SUB    ┌────────────────────────┐
- │  Python       │────────▶│          ↓            │────────▶│  C++ Skill Server       │
- │  Front-End    │         │     forward msgs      │         │  Topic: DATA_PROCESSING  │
- │  Agent        │   SUB   │          ↓            │   PUB   │  ├─ text-summarizer      │
- │               │◀────────│  XPUB :5555           │◀────────│  └─ csv-analyzer         │
- │  Tools:       │         │                      │         └────────────────────────┘
- │  • publish()  │         │  Metrics :9100        │
- │  • respond()  │         └─────────────────────┘         ┌────────────────────────┐
- └──────────────┘                                          │  C++ Skill Server       │
-                                                           │  Topic: CODE_ANALYSIS   │
-                                                           │  └─ code-complexity     │
-                                                           └────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│  Your Agent (pick any framework)                          │
+│  LangChain │ LangGraph │ CrewAI │ AutoGen │ Custom        │
+└────────────────────────┬──────────────────────────────────┘
+                         │  pip install skillscale
+┌────────────────────────▼──────────────────────────────────┐
+│  skillscale SDK  (middleware)                              │
+│  ┌───────────────┐  ┌────────────┐  ┌──────────────────┐  │
+│  │ Core Client    │  │ Adapters   │  │ Skill Discovery  │  │
+│  │ (async ZMQ)    │  │ LC/LG/Crew │  │ (SKILL.md scan)  │  │
+│  └───────────────┘  └────────────┘  └──────────────────┘  │
+└────────────────────────┬──────────────────────────────────┘
+                         │  ZeroMQ PUB/SUB
+┌────────────────────────▼──────────────────────────────────┐
+│  C++ XPUB/XSUB Proxy (:5444 XSUB │ :5555 XPUB │ :9100)  │
+└────────────┬──────────────────────────────────┬───────────┘
+             │                                  │
+ ┌───────────▼──────────────┐    ┌──────────────▼───────────┐
+ │  C++ Skill Server         │    │  C++ Skill Server        │
+ │  Topic: DATA_PROCESSING   │    │  Topic: CODE_ANALYSIS    │
+ │  ├─ text-summarizer       │    │  └─ code-complexity      │
+ │  └─ csv-analyzer          │    └──────────────────────────┘
+ └───────────────────────────┘
 ```
 
-**Data flow:** The agent publishes a JSON intent to a topic (e.g. `TOPIC_DATA_PROCESSING`).
-The proxy forwards it to the matching skill server. The skill server executes the
-appropriate skill script as a subprocess and publishes the result back on the agent's
+**How it works:** Your agent framework invokes a SkillScale tool (backed by the SDK client).
+The client publishes a JSON intent to a ZMQ topic (e.g. `TOPIC_DATA_PROCESSING`). The
+stateless XPUB/XSUB proxy forwards it to the matching C++ skill server. The skill server
+executes the skill script as a subprocess and publishes the result back on the agent's
 ephemeral reply topic (`AGENT_REPLY_<id>`). Everything is fully asynchronous and
 bidirectional.
 
@@ -36,55 +44,61 @@ bidirectional.
 
 ```
 SkillScale/
-├── proxy/                  # C++ XPUB/XSUB proxy (stateless message switch)
+├── skillscale/                 # Python SDK (the middleware)
+│   ├── __init__.py             # Public API: SkillScaleClient, SkillDiscovery
+│   ├── client.py               # Core async ZMQ pub/sub client
+│   ├── discovery.py            # SKILL.md scanner & metadata registry
+│   └── adapters/
+│       ├── langchain.py        # LangChain tools + toolkit
+│       ├── langgraph.py        # LangGraph nodes + graph factory
+│       └── crewai.py           # CrewAI tool adapter
+├── examples/                   # Ready-to-run agent examples
+│   ├── direct_client.py        # Raw SDK usage (no framework)
+│   ├── langchain_agent.py      # LangChain ReAct agent
+│   └── langgraph_agent.py      # LangGraph state graph
+├── proxy/                      # C++ XPUB/XSUB proxy
 │   ├── main.cpp
 │   └── CMakeLists.txt
-├── skill-server/           # C++ skill server (subscriber + subprocess executor)
-│   ├── main.cpp            # CLI arg parsing, worker thread pool, ZMQ sockets
-│   ├── skill_loader.cpp/h  # Parses SKILL.md YAML frontmatter, discovers skills
-│   ├── skill_executor.cpp/h # POSIX fork/exec with timeout enforcement
-│   ├── message_handler.cpp/h # JSON request/response envelope serialization
+├── skill-server/               # C++ skill server
+│   ├── main.cpp                # Worker thread pool, ZMQ sockets
+│   ├── skill_loader.cpp/h      # SKILL.md YAML parser
+│   ├── skill_executor.cpp/h    # POSIX fork/exec with timeout
+│   ├── message_handler.cpp/h   # JSON envelope serialization
 │   └── CMakeLists.txt
-├── agent/                  # Python async orchestrator
-│   ├── main.py             # SkillScaleAgent with publish() / respond() tools
+├── agent/                      # Standalone CLI agent (uses SDK)
+│   ├── main.py
 │   └── requirements.txt
-├── skills/                 # Portable skill definitions (SKILL.md + scripts/)
+├── skills/                     # Portable skill definitions
 │   ├── data-processing/
 │   │   ├── text-summarizer/
 │   │   └── csv-analyzer/
 │   └── code-analysis/
 │       └── code-complexity/
-├── tests/                  # 34 integration & fault-tolerance tests (pytest)
-│   ├── conftest.py         # Real ZMQ proxy fixture + MockSkillServer
-│   ├── test_01_proxy.py    # PubSub routing, topic filtering, multi-subscriber
-│   ├── test_02_agent_e2e.py # Single/parallel/sequential requests, timeouts
-│   ├── test_03_skills.py   # Real subprocess execution of all skill scripts
-│   └── test_04_fault_tolerance.py # Crash recovery, stale GC, rapid fire
-├── docker/                 # Multi-stage Dockerfiles
-│   ├── Dockerfile.proxy
-│   ├── Dockerfile.skill-server
-│   └── Dockerfile.agent
-├── k8s/                    # Kubernetes manifests
-│   ├── 00-namespace.yaml
-│   ├── 01-proxy.yaml       # Deployment + ClusterIP Services for proxy
-│   ├── 02-crd-skilltopic.yaml # SkillTopic CustomResourceDefinition
-│   ├── 03-skilltopic-instances.yaml
-│   ├── 04-keda-scaledobjects.yaml # Event-driven autoscaling via KEDA
-│   └── 05-agent.yaml
-├── docker-compose.yml      # Local multi-service dev environment
-├── setup.sh                # One-shot bootstrap (deps + build)
-├── launch_all.sh           # Start all services + run E2E test
-├── run_e2e.sh              # Full-stack E2E runner (proxy + server + agent)
-└── test_e2e_live.py        # Live smoke test against running C++ services
+├── tests/                      # 34 integration & fault-tolerance tests
+│   ├── conftest.py
+│   ├── test_01_proxy.py
+│   ├── test_02_agent_e2e.py
+│   ├── test_03_skills.py
+│   └── test_04_fault_tolerance.py
+├── docker/                     # Multi-stage Dockerfiles
+├── k8s/                        # Kubernetes manifests + CRDs + KEDA
+├── pyproject.toml              # SDK packaging (pip install skillscale)
+├── docker-compose.yml
+├── setup.sh
+├── launch_all.sh
+├── run_e2e.sh
+└── test_e2e_live.py
 ```
 
 ## Components
 
 | Component | Language | Description |
 |-----------|----------|-------------|
+| **skillscale/** | Python 3.10+ | **Middleware SDK** — core ZMQ client, skill discovery, and framework adapters (LangChain, LangGraph, CrewAI) |
 | **proxy/** | C++17 | XPUB/XSUB stateless message switch with Prometheus metrics on `:9100` |
 | **skill-server/** | C++17 | Multi-threaded subscriber; dispatches intents to worker threads; executes skills via POSIX `fork`/`exec` with configurable timeouts |
-| **agent/** | Python 3.10+ | Async orchestrator using `pyzmq` + `asyncio`; exposes `publish(topic, intent)` and `respond(content)` tools |
+| **agent/** | Python 3.10+ | Standalone CLI agent built on the SDK |
+| **examples/** | Python | Working examples: direct client, LangChain agent, LangGraph graph |
 | **skills/** | Markdown + Python | `SKILL.md` files with YAML frontmatter and `scripts/run.py` executables |
 | **tests/** | Python (pytest) | 34 tests covering proxy routing, agent E2E, skill execution, and fault tolerance |
 | **k8s/** | YAML | Namespace, Deployments, Services, SkillTopic CRD, KEDA ScaledObjects |
@@ -110,14 +124,26 @@ SkillScale/
 | pkg-config | `brew install pkg-config` | `apt install pkg-config` |
 | Python ≥ 3.10 | `brew install python` | `apt install python3 python3-venv` |
 
-### Automated Setup
+### Install the SDK
+
+```bash
+# From the repo root (editable / development mode)
+pip install -e ".[dev]"
+
+# With framework adapters
+pip install -e ".[langchain]"     # LangChain support
+pip install -e ".[langgraph]"     # LangGraph support
+pip install -e ".[crewai]"        # CrewAI support
+pip install -e ".[all]"           # everything
+```
+
+### Automated Setup (C++ build + Python deps)
 
 ```bash
 chmod +x setup.sh && ./setup.sh
 ```
 
-This installs Python packages (`pyzmq`, `pyyaml`, `pytest`, `pytest-asyncio`,
-`pytest-timeout`), checks for C/C++ dependencies, and builds both C++ binaries.
+This installs Python packages, checks for C/C++ dependencies, and builds both C++ binaries.
 
 ### Manual Build
 
@@ -258,6 +284,78 @@ Manifests create:
 - SkillTopic instances for `data-processing` and `code-analysis`
 - KEDA ScaledObjects for event-driven autoscaling of skill servers
 - Agent Deployment
+
+## Using the Middleware SDK
+
+### Direct Client (no framework)
+
+```python
+import asyncio, json
+from skillscale import SkillScaleClient
+
+async def main():
+    async with SkillScaleClient() as client:
+        intent = json.dumps({"skill": "text-summarizer", "data": "Some long text..."})
+        result = await client.invoke("TOPIC_DATA_PROCESSING", intent)
+        print(result)
+
+asyncio.run(main())
+```
+
+### LangChain
+
+```python
+from skillscale import SkillScaleClient
+from skillscale.adapters.langchain import SkillScaleToolkit
+
+client = SkillScaleClient()
+await client.connect()
+
+toolkit = SkillScaleToolkit.from_skills_dir(client, "./skills")
+tools = toolkit.get_tools()  # one LangChain Tool per skill
+
+# Use with any LangChain agent
+agent = create_react_agent(llm, tools, prompt)
+```
+
+### LangGraph
+
+```python
+from skillscale import SkillScaleClient
+from skillscale.adapters.langgraph import SkillScaleGraph
+
+client = SkillScaleClient()
+await client.connect()
+
+sg = SkillScaleGraph.from_skills_dir(client, "./skills")
+graph = sg.build_graph(llm=my_llm)  # or llm=None for keyword routing
+result = await graph.ainvoke({"input": "summarize this text..."})
+```
+
+### CrewAI
+
+```python
+from skillscale import SkillScaleClient
+from skillscale.adapters.crewai import SkillScaleCrewTools
+
+client = SkillScaleClient()
+await client.connect()
+
+crew_tools = SkillScaleCrewTools.from_skills_dir(client, "./skills")
+tools = crew_tools.get_tools()  # one CrewAI Tool per skill
+
+agent = Agent(role="analyst", tools=tools, ...)
+```
+
+### Skill Discovery (progressive disclosure)
+
+```python
+from skillscale import SkillDiscovery
+
+discovery = SkillDiscovery(skills_root="./skills").scan()
+print(discovery.metadata_summary())   # inject into LLM system prompt
+print(discovery.list_topics())        # ["TOPIC_CODE_ANALYSIS", "TOPIC_DATA_PROCESSING"]
+```
 
 ## Adding a New Skill
 
