@@ -42,6 +42,9 @@ struct Config {
     std::string skills_dir  = "./skills";
     std::string proxy_xpub  = "tcp://127.0.0.1:5555";
     std::string proxy_xsub  = "tcp://127.0.0.1:5444";
+    std::string matcher     = "keyword";     // "keyword" or "llm"
+    std::string prompt_file = "";            // optional custom prompt template
+    std::string python      = "python3";     // Python executable for LLM subprocess
     int         hwm         = 10000;
     int         heartbeat   = 5000;   // ms
     int         timeout     = 30000;  // skill execution timeout ms
@@ -60,6 +63,9 @@ static Config parse_args(int argc, char* argv[]) {
     if (auto v = std::getenv("SKILLSCALE_HWM"))        cfg.hwm = std::atoi(v);
     if (auto v = std::getenv("SKILLSCALE_TIMEOUT"))    cfg.timeout = std::atoi(v);
     if (auto v = std::getenv("SKILLSCALE_WORKERS"))    cfg.workers = std::atoi(v);
+    if (auto v = std::getenv("SKILLSCALE_MATCHER"))    cfg.matcher = v;
+    if (auto v = std::getenv("SKILLSCALE_PROMPT_FILE"))cfg.prompt_file = v;
+    if (auto v = std::getenv("SKILLSCALE_PYTHON"))     cfg.python = v;
 
     // CLI overrides
     for (int i = 1; i < argc - 1; i += 2) {
@@ -73,6 +79,9 @@ static Config parse_args(int argc, char* argv[]) {
         else if (key == "--hwm")         cfg.hwm = std::stoi(val);
         else if (key == "--timeout")     cfg.timeout = std::stoi(val);
         else if (key == "--workers")     cfg.workers = std::stoi(val);
+        else if (key == "--matcher")     cfg.matcher = val;
+        else if (key == "--prompt-file") cfg.prompt_file = val;
+        else if (key == "--python")      cfg.python = val;
     }
 
     return cfg;
@@ -151,13 +160,13 @@ static void worker_thread(zmq::context_t& ctx,
             // Mode 2: task description — match against skill descriptions
             if (!explicit_skill && intent_json.contains("task")) {
                 std::string task = intent_json["task"].get<std::string>();
-                std::cout << "[worker] Mode 2: matching task description against installed skills\n";
-                skill = loader.match_by_description(task);
+                std::cout << "[worker] Mode 2: matching task (" << loader.matcher_mode() << ")\n";
+                skill = loader.match_task(task);
             }
         } catch (...) {
             // Intent is plain text — Mode 2: match by description
-            std::cout << "[worker] Mode 2: plain text intent, matching by description\n";
-            skill = loader.match_by_description(req.intent);
+            std::cout << "[worker] Mode 2: plain text intent, matching (" << loader.matcher_mode() << ")\n";
+            skill = loader.match_task(req.intent);
         }
 
         // Fallback: use first skill if single-skill server
@@ -222,10 +231,18 @@ int main(int argc, char* argv[]) {
               << "[server]   Proxy XPUB : " << cfg.proxy_xpub << "\n"
               << "[server]   Proxy XSUB : " << cfg.proxy_xsub << "\n"
               << "[server]   HWM        : " << cfg.hwm << "\n"
-              << "[server]   Workers    : " << cfg.workers << "\n";
+              << "[server]   Workers    : " << cfg.workers << "\n"
+              << "[server]   Matcher    : " << cfg.matcher << "\n"
+              << "[server]   Prompt file: " << (cfg.prompt_file.empty() ? "(default)" : cfg.prompt_file) << "\n"
+              << "[server]   Python     : " << cfg.python << "\n";
 
     // ── Load skills ──
     SkillLoader loader(cfg.skills_dir);
+    loader.set_matcher(cfg.matcher);
+    if (!cfg.prompt_file.empty()) {
+        loader.set_prompt_file(cfg.prompt_file);
+    }
+    loader.set_python(cfg.python);
     int loaded = loader.load_all();
     if (loaded == 0) {
         std::cerr << "[server] WARNING: No skills loaded from "
@@ -237,6 +254,7 @@ int main(int argc, char* argv[]) {
     metadata["topic"] = cfg.topic;
     metadata["description"] = cfg.description;
     metadata["intent_modes"] = json::array({"explicit", "task-based"});
+    metadata["matcher"] = cfg.matcher;
     metadata["skills"] = json::array();
     for (auto& [name, skill] : loader.skills()) {
         json s;

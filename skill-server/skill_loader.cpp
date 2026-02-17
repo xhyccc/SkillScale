@@ -376,6 +376,63 @@ int SkillLoader::run_command(const std::string& cmd, std::string& output) {
 }
 
 // ──────────────────────────────────────────────────────────
+//  run_command_with_stdin — subprocess with stdin + stdout
+// ──────────────────────────────────────────────────────────
+
+int SkillLoader::run_command_with_stdin(const std::string& cmd,
+                                        const std::string& stdin_data,
+                                        std::string& output) {
+    output.clear();
+
+    int stdout_pipe[2], stdin_pipe[2];
+    if (pipe(stdout_pipe) != 0 || pipe(stdin_pipe) != 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stdin_pipe[0]);  close(stdin_pipe[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child
+        close(stdin_pipe[1]);
+        dup2(stdin_pipe[0], STDIN_FILENO);
+        close(stdin_pipe[0]);
+
+        close(stdout_pipe[0]);
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        close(stdout_pipe[1]);
+
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+        _exit(127);
+    }
+
+    // Parent
+    close(stdin_pipe[0]);
+    close(stdout_pipe[1]);
+
+    // Write stdin data
+    if (!stdin_data.empty()) {
+        ssize_t written = write(stdin_pipe[1], stdin_data.c_str(), stdin_data.size());
+        (void)written;
+    }
+    close(stdin_pipe[1]);
+
+    // Read stdout
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(stdout_pipe[0], buf, sizeof(buf))) > 0) {
+        output.append(buf, n);
+    }
+    close(stdout_pipe[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+// ──────────────────────────────────────────────────────────
 //  Description-based skill matching (Mode 2)
 // ──────────────────────────────────────────────────────────
 
@@ -443,6 +500,106 @@ int SkillLoader::keyword_score(const std::vector<std::string>& text_tokens,
         }
     }
     return score;
+}
+
+// ──────────────────────────────────────────────────────────
+//  LLM-based skill matching via Python subprocess
+// ──────────────────────────────────────────────────────────
+
+const SkillDefinition* SkillLoader::match_by_llm(
+    const std::string& task_text) const {
+
+    if (skills_.empty()) return nullptr;
+
+    // Build JSON input for scripts/llm_match.py
+    std::string json_input = "{\"task\": \"";
+    // Escape the task text for JSON
+    for (char c : task_text) {
+        switch (c) {
+            case '"':  json_input += "\\\""; break;
+            case '\\': json_input += "\\\\"; break;
+            case '\n': json_input += "\\n"; break;
+            case '\r': json_input += "\\r"; break;
+            case '\t': json_input += "\\t"; break;
+            default:   json_input += c;
+        }
+    }
+    json_input += "\", \"skills\": [";
+
+    bool first = true;
+    for (auto& [name, skill] : skills_) {
+        if (!first) json_input += ", ";
+        first = false;
+        json_input += "{\"name\": \"" + name + "\", \"description\": \"";
+        for (char c : skill.description) {
+            switch (c) {
+                case '"':  json_input += "\\\""; break;
+                case '\\': json_input += "\\\\"; break;
+                case '\n': json_input += " "; break;
+                case '\r': break;
+                default:   json_input += c;
+            }
+        }
+        json_input += "\"}";
+    }
+    json_input += "]";
+
+    // Add prompt_file if configured
+    if (!prompt_file_.empty()) {
+        json_input += ", \"prompt_file\": \"" + prompt_file_ + "\"";
+    }
+    json_input += "}";
+
+    // Call Python subprocess
+    std::string script_path = skills_dir_ + "/../../scripts/llm_match.py";
+    std::string cmd = python_path_ + " " + script_path;
+
+    std::cout << "[loader] LLM matching: calling " << cmd << "\n";
+
+    std::string output;
+    int rc = run_command_with_stdin(cmd, json_input, output);
+
+    if (rc != 0 || output.empty()) {
+        std::cerr << "[loader] LLM matching failed (rc=" << rc
+                  << "), falling back to keyword matching\n";
+        return match_by_description(task_text);
+    }
+
+    // Trim whitespace from output
+    auto trim_start = output.find_first_not_of(" \t\n\r");
+    auto trim_end = output.find_last_not_of(" \t\n\r");
+    if (trim_start != std::string::npos) {
+        output = output.substr(trim_start, trim_end - trim_start + 1);
+    }
+
+    std::cout << "[loader] LLM matched skill: '" << output << "'\n";
+
+    if (output == "none") {
+        std::cerr << "[loader] LLM returned 'none', falling back to keyword matching\n";
+        return match_by_description(task_text);
+    }
+
+    // Look up the matched skill
+    const SkillDefinition* result = find(output);
+    if (!result) {
+        std::cerr << "[loader] LLM returned unknown skill '" << output
+                  << "', falling back to keyword matching\n";
+        return match_by_description(task_text);
+    }
+
+    return result;
+}
+
+// ──────────────────────────────────────────────────────────
+//  Auto-dispatch matcher
+// ──────────────────────────────────────────────────────────
+
+const SkillDefinition* SkillLoader::match_task(
+    const std::string& task_text) const {
+    if (matcher_mode_ == "llm") {
+        return match_by_llm(task_text);
+    }
+    return match_by_description(task_text);
 }
 
 const SkillDefinition* SkillLoader::match_by_description(

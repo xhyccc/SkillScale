@@ -63,6 +63,26 @@ public:
     /// nullptr if no skills are loaded.
     const SkillDefinition* match_by_description(const std::string& task_text) const;
 
+    /// Match a task using an LLM via Python subprocess.
+    /// Calls scripts/llm_match.py with skill list + task as input.
+    /// Falls back to keyword matching if LLM call fails.
+    const SkillDefinition* match_by_llm(const std::string& task_text) const;
+
+    /// Set the matching strategy: "keyword" or "llm"
+    void set_matcher(const std::string& mode) { matcher_mode_ = mode; }
+    const std::string& matcher_mode() const { return matcher_mode_; }
+
+    /// Set a custom prompt file for LLM matching
+    void set_prompt_file(const std::string& path) { prompt_file_ = path; }
+    const std::string& prompt_file() const { return prompt_file_; }
+
+    /// Set the Python executable for LLM subprocess
+    void set_python(const std::string& path) { python_path_ = path; }
+    const std::string& python_path() const { return python_path_; }
+
+    /// Auto-dispatch: uses LLM or keyword matching based on matcher_mode_
+    const SkillDefinition* match_task(const std::string& task_text) const;
+
     /// All loaded skills (mutable access for progressive loading)
     std::unordered_map<std::string, SkillDefinition>& skills() {
         return skills_;
@@ -75,6 +95,9 @@ public:
 
 private:
     std::string skills_dir_;
+    std::string matcher_mode_ = "keyword";  // "keyword" or "llm"
+    std::string prompt_file_;                // optional custom prompt template
+    std::string python_path_ = "python3";   // Python executable for LLM subprocess
     std::unordered_map<std::string, SkillDefinition> skills_;
 
     bool parse_skill_md(const std::string& path, SkillDefinition& out);
@@ -87,6 +110,11 @@ private:
 
     /// Run a subprocess command and capture stdout. Returns exit code.
     static int run_command(const std::string& cmd, std::string& output);
+
+    /// Run a subprocess command with stdin data and capture stdout.
+    static int run_command_with_stdin(const std::string& cmd,
+                                      const std::string& stdin_data,
+                                      std::string& output);
 
     /// Tokenize a string into lowercase words
     static std::vector<std::string> tokenize(const std::string& text);

@@ -6,9 +6,15 @@
 #   C++ Skill Server × 2      ← OpenSkills invocation (AGENTS.md + CLI)
 #   Python Agent               ← LLM-powered intent routing
 #
+# Set MATCHER=llm to use LLM-based skill matching (default: keyword)
+#
 set -e
 
 cd "$(dirname "$0")"
+
+# ── Configuration ──
+MATCHER="${MATCHER:-keyword}"   # keyword | llm
+PROMPT_FILE="${PROMPT_FILE:-}" # optional custom prompt template
 
 # Clean up old processes
 pkill -9 -f skillscale_proxy 2>/dev/null || true
@@ -18,8 +24,8 @@ sleep 2
 
 # Detect Python venv
 PYTHON="python3"
-[[ -x ./venv/bin/python3 ]] && PYTHON="./venv/bin/python3"
-[[ -x ./.venv/bin/python3 ]] && PYTHON="./.venv/bin/python3"
+[[ -x ./venv/bin/python3 ]] && PYTHON="$(pwd)/venv/bin/python3"
+[[ -x ./.venv/bin/python3 ]] && PYTHON="$(pwd)/.venv/bin/python3"
 
 # Start C++ proxy (ZMQ middleware — unchanged)
 nohup ./proxy/build/skillscale_proxy > /tmp/skillscale_proxy.log 2>&1 &
@@ -27,23 +33,29 @@ PROXY_PID=$!
 echo "[launcher] Proxy started (pid=$PROXY_PID)"
 sleep 1
 
+# Build matcher args
+MATCHER_ARGS="--matcher $MATCHER --python $PYTHON"
+[[ -n "$PROMPT_FILE" ]] && MATCHER_ARGS="$MATCHER_ARGS --prompt-file $PROMPT_FILE"
+
 # Start C++ skill server: data-processing (text-summarizer + csv-analyzer)
 nohup ./skill-server/build/skillscale_skill_server \
     --topic TOPIC_DATA_PROCESSING \
-    --description "Data processing server — text summarization, CSV analysis, and general data transformation" \
+    --description "Data processing server" \
     --skills-dir "$(pwd)/skills/data-processing" \
+    $MATCHER_ARGS \
     > /tmp/skillscale_server_data.log 2>&1 &
 SERVER_DATA_PID=$!
-echo "[launcher] Skill server (data-processing) started (pid=$SERVER_DATA_PID)"
+echo "[launcher] Skill server (data-processing) started (pid=$SERVER_DATA_PID, matcher=$MATCHER)"
 
 # Start C++ skill server: code-analysis (code-complexity + dead-code-detector)
 nohup ./skill-server/build/skillscale_skill_server \
     --topic TOPIC_CODE_ANALYSIS \
-    --description "Code analysis server — cyclomatic complexity metrics, dead code detection, and Python static analysis" \
+    --description "Code analysis server" \
     --skills-dir "$(pwd)/skills/code-analysis" \
+    $MATCHER_ARGS \
     > /tmp/skillscale_server_code.log 2>&1 &
 SERVER_CODE_PID=$!
-echo "[launcher] Skill server (code-analysis) started (pid=$SERVER_CODE_PID)"
+echo "[launcher] Skill server (code-analysis) started (pid=$SERVER_CODE_PID, matcher=$MATCHER)"
 sleep 2
 
 echo "[launcher] Proxy log:"
