@@ -285,7 +285,7 @@ def main():
         )
         llm_input = (f"### Detected Issues\n{issues_text}\n\n"
                      f"### Source Code\n```python\n{source[:4000]}\n```")
-        review = chat(LLM_PROMPT, llm_input, max_tokens=512, temperature=0.3)
+        review = chat(LLM_PROMPT, llm_input, max_tokens=101240, temperature=0.3)
         print(review)
     except Exception as e:
         print(f"\n*LLM review unavailable: {e}*")

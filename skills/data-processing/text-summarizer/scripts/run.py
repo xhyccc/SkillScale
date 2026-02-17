@@ -66,7 +66,7 @@ def main():
     llm_input = text[:8000] if len(text) > 8000 else text
 
     try:
-        result = chat(SYSTEM_PROMPT, llm_input, max_tokens=1024, temperature=0.3)
+        result = chat(SYSTEM_PROMPT, llm_input, max_tokens=101240, temperature=0.3)
         print(result)
         print(f"\n*Input: {stats['words']} words, {stats['sentences']} sentences.*")
     except Exception as e:

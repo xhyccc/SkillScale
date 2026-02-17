@@ -70,7 +70,7 @@ def route_to_topic_llm(
     reply = llm_chat(
         ROUTER_SYSTEM_PROMPT,
         user_msg,
-        max_tokens=1024,
+        max_tokens=101240,
         temperature=0.0,
     ).strip()
 

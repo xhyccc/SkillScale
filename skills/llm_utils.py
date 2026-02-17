@@ -108,7 +108,7 @@ def chat(
     system_prompt: str,
     user_message: str,
     *,
-    max_tokens: int = 2048,
+    max_tokens: int = 101240,
     temperature: float = 0.3,
 ) -> str:
     """
@@ -139,7 +139,7 @@ def chat(
 def chat_with_messages(
     messages: list[dict],
     *,
-    max_tokens: int = 2048,
+    max_tokens: int = 101240,
     temperature: float = 0.3,
 ) -> str:
     """

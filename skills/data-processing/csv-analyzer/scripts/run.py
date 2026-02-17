@@ -163,7 +163,7 @@ def main():
         )
         llm_input += f"\n### Sample Data (first rows)\n```\n{sample_rows}\n```"
 
-        insights = chat(SYSTEM_PROMPT, llm_input, max_tokens=512, temperature=0.3)
+        insights = chat(SYSTEM_PROMPT, llm_input, max_tokens=101240, temperature=0.3)
         print(insights)
     except Exception as e:
         print(f"\n---\n*LLM insights unavailable: {e}*")
