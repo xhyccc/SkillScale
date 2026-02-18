@@ -49,6 +49,9 @@ class ClientConfig:
             default_timeout=float(
                 os.getenv("PUBLISH_TIMEOUT", str(cls.default_timeout))
             ),
+            hwm=int(os.getenv("SKILLSCALE_HWM", str(cls.hwm))),
+            heartbeat_ivl=int(os.getenv("SKILLSCALE_HEARTBEAT", str(cls.heartbeat_ivl))),
+            settle_time=float(os.getenv("SKILLSCALE_SETTLE_TIME", str(cls.settle_time))),
         )
 
 

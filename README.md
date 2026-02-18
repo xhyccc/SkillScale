@@ -43,10 +43,9 @@ thin adapters.
    (e.g. `TOPIC_DATA_PROCESSING`). An LLM classifies the intent and selects the topic.
 2. **Proxy forwarding** — The stateless XPUB/XSUB proxy forwards it to the matching
    C++ skill server.
-3. **Skill matching** — The C++ skill server discovers skills from `AGENTS.md`
-   (`<available_skills>` XML). By default, it calls a Python subprocess
-   (`scripts/llm_match.py`) that uses an LLM to match the task to the best skill.
-   If LLM matching fails, it falls back to keyword scoring automatically.
+3. **Skill matching** — The C++ skill server dispatches the task to
+   [OpenCode](https://github.com/opencode-ai/opencode), which reads `AGENTS.md`
+   to discover available skills and automatically matches + executes the best one.
 4. **Skill execution** — The matched skill's `scripts/run.py` is executed via POSIX
    `fork`/`exec`. Skills themselves call LLMs for intelligent analysis.
 5. **Response** — Results are published back on the agent's ephemeral reply topic
@@ -335,18 +334,92 @@ python3 test_e2e_live.py
 
 ### Environment Variables
 
-| Variable | Default | Used By | Description |
-|----------|---------|---------|-------------|
-| `LLM_PROVIDER` | `azure` | all skills, agent, matcher | Active LLM provider (`azure`, `openai`, or `zhipu`) |
-| `SKILLSCALE_MATCHER` | `llm` | skill-server | Skill matching strategy: `llm` (default) or `keyword` |
-| `SKILLSCALE_PROMPT_FILE` | `""` | skill-server | Custom prompt template for LLM matching |
-| `SKILLSCALE_PYTHON` | `python3` | skill-server | Python executable path for LLM subprocess |
-| `SKILLSCALE_PROXY_XSUB` | `tcp://127.0.0.1:5444` | agent, skill-server | Proxy XSUB endpoint |
-| `SKILLSCALE_PROXY_XPUB` | `tcp://127.0.0.1:5555` | agent, skill-server | Proxy XPUB endpoint |
-| `SKILLSCALE_TOPIC` | `TOPIC_DEFAULT` | skill-server | ZeroMQ topic to subscribe to |
-| `SKILLSCALE_SKILLS_DIR` | `./skills` | skill-server | Directory containing skill subdirectories |
-| `SKILLSCALE_WORKERS` | `2` | skill-server | Number of worker threads |
-| `SKILLSCALE_TIMEOUT` | `30000` / `30` | skill-server (ms) / agent (s) | Skill execution / request timeout |
+All configuration is centralized in `.env` (see `.env.example` for all options):
+
+```bash
+cp .env.example .env   # then fill in your API keys and tune parameters
+```
+
+```dotenv
+# ──────────────────────────────────────────────────────────
+#  SkillScale — Configuration
+# ──────────────────────────────────────────────────────────
+#
+# Copy this file to .env and fill in your API keys:
+#   cp .env.example .env
+#
+
+# ══════════════════════════════════════════════════════════
+#  LLM Providers
+# ══════════════════════════════════════════════════════════
+
+# ── Active Provider Selection ─────────────────────────────
+# Options: openai, azure, zhipu
+LLM_PROVIDER=openai
+
+# ── OpenAI / SiliconFlow Configuration ────────────────────
+OPENAI_API_KEY=sk-your-openai-api-key-here
+OPENAI_API_BASE=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o
+
+# ── Azure OpenAI Configuration ───────────────────────────
+AZURE_API_KEY=your-azure-api-key-here
+AZURE_API_BASE=https://your-resource.openai.azure.com/
+AZURE_API_VERSION=2024-12-01-preview
+AZURE_MODEL=gpt-4o
+
+# ── Zhipu AI Configuration ───────────────────────────────
+ZHIPU_API_KEY=your-zhipu-api-key-here
+ZHIPU_API_BASE=https://open.bigmodel.cn/api/paas/v4
+ZHIPU_MODEL=GLM-4.7-FlashX
+
+# ══════════════════════════════════════════════════════════
+#  Skill Server
+# ══════════════════════════════════════════════════════════
+
+# Concurrent worker threads per skill server container
+SKILLSCALE_WORKERS=2
+
+# Skill execution timeout (ms) — how long C++ skill server waits
+# for OpenCode/skill subprocess to complete
+SKILLSCALE_TIMEOUT=300000
+
+# ZMQ high-water mark (max queued messages per socket)
+SKILLSCALE_HWM=10000
+
+# ZMQ heartbeat interval (ms)
+SKILLSCALE_HEARTBEAT=5000
+
+# Skill matching mode: "llm" or "keyword"
+SKILLSCALE_MATCHER=llm
+
+# Python executable for running skill scripts
+SKILLSCALE_PYTHON=python3
+
+# ══════════════════════════════════════════════════════════
+#  Proxy
+# ══════════════════════════════════════════════════════════
+
+# Proxy bind addresses and metrics port
+SKILLSCALE_XSUB_BIND=tcp://*:5444
+SKILLSCALE_XPUB_BIND=tcp://*:5555
+SKILLSCALE_METRICS_PORT=9100
+
+# ══════════════════════════════════════════════════════════
+#  Client / Agent
+# ══════════════════════════════════════════════════════════
+
+# Publish timeout (seconds) — how long the ZMQ client waits
+# for a response after publishing to the message queue
+PUBLISH_TIMEOUT=300
+
+# Client connect addresses (used by agent and Python SDK)
+SKILLSCALE_PROXY_XSUB=tcp://127.0.0.1:5444
+SKILLSCALE_PROXY_XPUB=tcp://127.0.0.1:5555
+
+# Subscription settle time (seconds) — delay for ZMQ sub propagation
+SKILLSCALE_SETTLE_TIME=0.5
+```
 
 ### Skill Server CLI Arguments
 
