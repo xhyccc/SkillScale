@@ -352,6 +352,7 @@ def _get_discovery():
 
 
 async def _get_agent():
+    """Get or create the ZMQ agent (used in local/non-Docker mode)."""
     global _agent
     async with _agent_lock:
         if _agent is None:
@@ -360,6 +361,47 @@ async def _get_agent():
             _agent = SkillScaleAgent(config)
             await _agent.start()
         return _agent
+
+
+async def _docker_publish(topic: str, message: str, timeout: float = 300) -> dict:
+    """Publish a ZMQ message by exec'ing into the agent container.
+
+    Docker Desktop on macOS routes ZMQ through a VM bridge which silently
+    drops PUB/SUB subscription frames.  Running the client **inside** the
+    Docker network avoids this entirely.
+    """
+    cmd = [
+        "docker", "compose", "exec", "-T", "agent",
+        "python3", "agent/docker_publish.py", topic, str(timeout),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(PROJECT_ROOT),
+    )
+    stdout, stderr = await asyncio.wait_for(
+        proc.communicate(input=message.encode()), timeout=timeout + 30
+    )
+
+    output = stdout.decode().strip()
+    if not output:
+        err = stderr.decode().strip()
+        raise RuntimeError(f"Docker exec returned no output: {err}")
+
+    # Take the last JSON line (skip any startup noise)
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            result = json.loads(line)
+            if result.get("error"):
+                if result["error"] == "timeout":
+                    raise asyncio.TimeoutError()
+                raise RuntimeError(result["error"])
+            return result
+
+    raise RuntimeError(f"Could not parse Docker exec output: {output[:500]}")
 
 
 # ══════════════════════════════════════════════════════════
@@ -842,22 +884,25 @@ async def chat_endpoint(req: ChatRequest):
     trace.add_span(routing_span)
 
     # 3. ZMQ publish (with trace)
+    docker_mode = _detect_docker_mode()
     zmq_span = TraceSpan(
         name="ZeroMQ Publish & Await",
         phase="zmq",
         start_ms=time.time() * 1000,
         details={
             "topic": topic,
-            "proxy_xsub": "tcp://127.0.0.1:5444",
-            "proxy_xpub": "tcp://127.0.0.1:5555",
+            "docker_mode": docker_mode,
             "message_size_bytes": len(req.message.encode()),
         },
     )
 
-    agent = await _get_agent()
     raw_response = {}
     try:
-        raw_response = await agent.publish_raw(topic, req.message, timeout=req.timeout)
+        if docker_mode:
+            raw_response = await _docker_publish(topic, req.message, timeout=req.timeout)
+        else:
+            agent = await _get_agent()
+            raw_response = await agent.publish_raw(topic, req.message, timeout=req.timeout)
         result = raw_response.get("content", "")
         zmq_span.finish({
             "status": "success",

@@ -12,21 +12,14 @@ set -euo pipefail
 OPENCODE_DATA_DIR="${HOME}/.local/share/opencode"
 mkdir -p "$OPENCODE_DATA_DIR"
 
-if [[ -n "${SILICONFLOW_API_KEY:-}" ]]; then
-    cat > "$OPENCODE_DATA_DIR/auth.json" <<EOF
-{"siliconflow":{"type":"api","key":"${SILICONFLOW_API_KEY}"}}
-EOF
-    echo "[entrypoint] OpenCode auth configured for SiliconFlow provider"
-elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
-    # Fallback: if SILICONFLOW_API_KEY not set but OPENAI_API_KEY is,
-    # use it for SiliconFlow (since the provider uses OpenAI-compatible API)
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     cat > "$OPENCODE_DATA_DIR/auth.json" <<EOF
 {"siliconflow":{"type":"api","key":"${OPENAI_API_KEY}"}}
 EOF
-    echo "[entrypoint] OpenCode auth configured using OPENAI_API_KEY"
+    echo "[entrypoint] OpenCode auth configured (SiliconFlow provider)"
 else
-    echo "[entrypoint] WARNING: No API key found for OpenCode. Set SILICONFLOW_API_KEY or OPENAI_API_KEY."
-    echo "[entrypoint] OpenCode execution will fail; falling back to direct skill execution."
+    echo "[entrypoint] WARNING: OPENAI_API_KEY not set — OpenCode execution will fail."
+    echo "[entrypoint] Falling back to direct skill execution."
 fi
 
 # ── 2. Verify OpenCode installation ──
