@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM docker.1ms.run/library/python:3.12-slim
 
 WORKDIR /app
 
@@ -9,6 +9,6 @@ COPY agent/ .
 
 ENV SKILLSCALE_PROXY_XSUB=tcp://proxy:5444
 ENV SKILLSCALE_PROXY_XPUB=tcp://proxy:5555
-ENV SKILLSCALE_TIMEOUT=30
+ENV SKILLSCALE_TIMEOUT=180
 
 ENTRYPOINT ["python3", "main.py"]

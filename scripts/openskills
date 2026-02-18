@@ -1,22 +1,82 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────────────────
-# openskills — Thin wrapper around npm openskills CLI
+# openskills — Extended wrapper around npm openskills CLI
 #
-# This script delegates to `npx openskills` for universal skill
-# management compatible with the Anthropic skills ecosystem.
+# Adds a `run` subcommand for skill execution on top of the
+# standard npm openskills commands (list, read, sync, install, …).
 #
 # Usage:
 #   openskills list                              List installed skills
 #   openskills read   <name>                     Read SKILL.md content
+#   openskills run    <name>                     Execute a skill's scripts/run.py
 #   openskills sync   [-y] [-o <path>]           Update AGENTS.md
 #   openskills install <source> [options]         Install from GitHub/local/git
 #   openskills update [name...]                  Update installed skills
 #   openskills remove <name>                     Remove a skill
+#
+# The `run` command:
+#   - Locates the skill in .claude/skills/<name>/ (installed by openskills)
+#   - Falls back to skills/**/<name>/ (local source)
+#   - Executes scripts/run.py (or scripts/run.sh) in the skill directory
+#   - Reads input from stdin, writes output to stdout
+#   - Uses the SKILLSCALE_PYTHON env var for the Python interpreter
 #
 # Requires: Node.js 20.6+, npm
 # Package:  https://www.npmjs.com/package/openskills
 # ────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Delegate all commands to npm openskills
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Custom `run` subcommand ──
+if [[ "${1:-}" == "run" ]]; then
+    shift
+    SKILL_NAME="${1:?Usage: openskills run <skill-name>}"
+    shift || true
+
+    # Python interpreter (configurable via env or default)
+    PYTHON="${SKILLSCALE_PYTHON:-python3}"
+    [[ -x "$PROJECT_ROOT/.venv/bin/python3" ]] && PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+
+    # ── Locate skill directory ──
+    SKILL_DIR=""
+
+    # Strategy 1: .claude/skills/<name> (installed via openskills install)
+    if [[ -d "$PROJECT_ROOT/.claude/skills/$SKILL_NAME" ]]; then
+        SKILL_DIR="$PROJECT_ROOT/.claude/skills/$SKILL_NAME"
+    fi
+
+    # Strategy 2: skills/**/<name> (local source tree)
+    if [[ -z "$SKILL_DIR" ]]; then
+        for d in "$PROJECT_ROOT"/skills/*/"$SKILL_NAME"; do
+            if [[ -d "$d" ]]; then
+                SKILL_DIR="$d"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$SKILL_DIR" ]]; then
+        echo "Error: skill '$SKILL_NAME' not found in .claude/skills/ or skills/**/" >&2
+        exit 1
+    fi
+
+    # ── Locate and execute the run script ──
+    # Add skills/ directory to PYTHONPATH for shared modules (llm_utils.py)
+    export PYTHONPATH="${PROJECT_ROOT}/skills:${PYTHONPATH:-}"
+
+    if [[ -f "$SKILL_DIR/scripts/run.py" ]]; then
+        cd "$SKILL_DIR"
+        exec "$PYTHON" "$SKILL_DIR/scripts/run.py" "$@"
+    elif [[ -f "$SKILL_DIR/scripts/run.sh" ]]; then
+        cd "$SKILL_DIR"
+        exec bash "$SKILL_DIR/scripts/run.sh" "$@"
+    else
+        echo "Error: no scripts/run.py or scripts/run.sh found for skill '$SKILL_NAME'" >&2
+        exit 1
+    fi
+fi
+
+# ── All other commands delegate to npm openskills ──
 exec npx openskills "$@"

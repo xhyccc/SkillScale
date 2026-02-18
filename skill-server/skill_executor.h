@@ -12,6 +12,7 @@ struct ExecutionResult {
     int exit_code = -1;
     std::string stdout_output;
     std::string stderr_output;
+    std::string matched_skill;  // skill name if detected from output
     std::chrono::milliseconds elapsed{0};
 };
 
@@ -36,6 +37,17 @@ public:
      */
     ExecutionResult execute(const SkillDefinition& skill,
                             const std::string& intent);
+
+    /**
+     * Execute directly via OpenCode without pre-matching.
+     * OpenCode reads AGENTS.md to decide which skill to use.
+     *
+     * @param intent      Natural language user intent
+     * @param hint_skill  Optional skill hint (not enforced)
+     * @return            Execution result with captured output
+     */
+    ExecutionResult execute_direct(const std::string& intent,
+                                   const std::string& hint_skill = "");
 
 private:
     int timeout_ms_;

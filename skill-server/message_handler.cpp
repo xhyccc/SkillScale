@@ -37,6 +37,9 @@ std::string MessageHandler::serialize_response(const OutgoingResponse& response)
     j["error"]      = response.error;
     j["timestamp"]  = std::chrono::duration<double>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    if (!response.trace_meta.is_null() && !response.trace_meta.empty()) {
+        j["_trace"] = response.trace_meta;
+    }
     return j.dump();
 }
 
@@ -48,7 +51,8 @@ OutgoingResponse MessageHandler::make_success(const std::string& request_id,
         .request_id = request_id,
         .status     = "success",
         .content    = content,
-        .error      = ""
+        .error      = "",
+        .trace_meta = {}
     };
 }
 
@@ -60,6 +64,7 @@ OutgoingResponse MessageHandler::make_error(const std::string& request_id,
         .request_id = request_id,
         .status     = "error",
         .content    = "",
-        .error      = error_msg
+        .error      = error_msg,
+        .trace_meta = {}
     };
 }

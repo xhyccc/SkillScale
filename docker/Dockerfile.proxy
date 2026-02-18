@@ -1,5 +1,5 @@
 # ── Stage 1: Build ──
-FROM ubuntu:22.04 AS builder
+FROM docker.1ms.run/library/ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -8,9 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cppzmq (header-only)
-ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq.hpp /usr/include/zmq.hpp
-ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq_addon.hpp /usr/include/zmq_addon.hpp
+# Install cppzmq (header-only) — copied from local Homebrew install
+COPY docker/cppzmq/zmq.hpp /usr/include/zmq.hpp
+COPY docker/cppzmq/zmq_addon.hpp /usr/include/zmq_addon.hpp
 
 WORKDIR /build
 COPY proxy/ .
@@ -18,10 +18,11 @@ COPY proxy/ .
 RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
 
 # ── Stage 2: Runtime ──
-FROM ubuntu:22.04
+FROM docker.1ms.run/library/ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/build/skillscale_proxy /usr/local/bin/skillscale_proxy

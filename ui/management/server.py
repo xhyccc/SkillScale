@@ -122,6 +122,143 @@ services: dict[str, ServiceInfo] = {}
 
 
 # ══════════════════════════════════════════════════════════
+#  Docker container detection
+# ══════════════════════════════════════════════════════════
+def _detect_docker_mode() -> bool:
+    """Check if SkillScale Docker containers are running."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "ps", "--format", "json"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(PROJECT_ROOT),
+        )
+        if result.returncode != 0:
+            return False
+        output = result.stdout.strip()
+        if not output:
+            return False
+        # docker compose ps --format json returns one JSON object per line
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                info = json.loads(line)
+                # If any skillscale container is running, we're in Docker mode
+                svc_name = info.get("Service", info.get("Name", ""))
+                state = info.get("State", "").lower()
+                if ("proxy" in svc_name or "skill-server" in svc_name) and state == "running":
+                    return True
+            except json.JSONDecodeError:
+                continue
+        return False
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _get_docker_services() -> list[dict]:
+    """Get status of all SkillScale Docker containers."""
+    result_list = []
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "ps", "--format", "json"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(PROJECT_ROOT),
+        )
+        if result.returncode != 0:
+            return []
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                info = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            svc_name = info.get("Service", info.get("Name", ""))
+            state = info.get("State", "").lower()
+            health = info.get("Health", "").lower()
+
+            # Map Docker state to our status
+            if state == "running":
+                status = "running"
+            elif state in ("exited", "dead"):
+                status = "stopped"
+            else:
+                status = "error" if state == "restarting" else "stopped"
+
+            # Map Docker service names to our naming convention
+            if svc_name == "proxy":
+                name = "proxy"
+                topic = None
+            elif svc_name.startswith("skill-server-"):
+                name = f"server-{svc_name.replace('skill-server-', '')}"
+                folder = svc_name.replace("skill-server-", "")
+                topic = f"TOPIC_{folder.upper().replace('-', '_')}"
+            elif svc_name == "agent":
+                name = "agent"
+                topic = None
+            else:
+                continue
+
+            result_list.append({
+                "name": name,
+                "status": status,
+                "pid": None,
+                "topic": topic,
+                "skills_dir": None,
+                "matcher": "llm",
+                "log_file": None,
+                "started_at": None,
+                "docker": True,
+                "docker_service": svc_name,
+                "docker_health": health or None,
+            })
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return result_list
+
+
+def _docker_compose_cmd(action: str, service: str | None = None, extra: list[str] | None = None) -> dict:
+    """Run a docker compose command and return result."""
+    cmd = ["docker", "compose", action]
+    if extra:
+        cmd.extend(extra)
+    if service:
+        cmd.append(service)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30,
+            cwd=str(PROJECT_ROOT),
+        )
+        return {
+            "status": "ok" if result.returncode == 0 else "error",
+            "stdout": result.stdout[-500:] if result.stdout else "",
+            "stderr": result.stderr[-500:] if result.stderr else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "stderr": "Command timed out"}
+    except FileNotFoundError:
+        return {"status": "error", "stderr": "docker compose not found"}
+
+
+def _get_docker_logs(service: str, tail: int = 200) -> list[str]:
+    """Get logs from a Docker container."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "logs", "--tail", str(tail), "--no-color", service],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(PROJECT_ROOT),
+        )
+        if result.returncode == 0:
+            return result.stdout.splitlines()
+        return [f"Error fetching logs: {result.stderr}"]
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return [f"Error: {e}"]
+
+
+# ══════════════════════════════════════════════════════════
 #  Chat agent state
 # ══════════════════════════════════════════════════════════
 _agent = None
@@ -300,7 +437,7 @@ class LaunchRequest(BaseModel):
     matcher: str = "llm"
     description: str = ""
     workers: int = 2
-    timeout_ms: int = 30000
+    timeout_ms: int = 180000
 
 
 class LaunchProxyRequest(BaseModel):
@@ -328,6 +465,12 @@ def list_skill_folders():
 
 @app.get("/api/services")
 def list_services():
+    # Check Docker mode first
+    docker_services = _get_docker_services()
+    if docker_services:
+        return {"services": docker_services, "docker_mode": True}
+
+    # Fall back to local process tracking
     result = []
     for name, svc in services.items():
         _update_service_status(svc)
@@ -340,12 +483,18 @@ def list_services():
             "matcher": svc.matcher,
             "log_file": svc.log_file,
             "started_at": svc.started_at,
+            "docker": False,
         })
-    return {"services": result}
+    return {"services": result, "docker_mode": False}
 
 
 @app.post("/api/proxy/launch")
 def launch_proxy(req: LaunchProxyRequest = LaunchProxyRequest()):
+    # Docker mode: start proxy container
+    if _detect_docker_mode():
+        result = _docker_compose_cmd("start", "proxy")
+        return {"status": "started", "docker": True, **result}
+
     if "proxy" in services:
         _update_service_status(services["proxy"])
         if services["proxy"].status == "running":
@@ -381,6 +530,13 @@ def launch_proxy(req: LaunchProxyRequest = LaunchProxyRequest()):
 @app.post("/api/server/launch")
 def launch_server(req: LaunchRequest):
     svc_name = f"server-{req.topic.lower().replace('topic_', '')}"
+
+    # Docker mode: start the corresponding Docker container
+    if _detect_docker_mode():
+        folder = req.topic.lower().replace("topic_", "").replace("_", "-")
+        docker_svc = f"skill-server-{folder}"
+        result = _docker_compose_cmd("start", docker_svc)
+        return {"status": "started", "name": svc_name, "docker": True, **result}
 
     if svc_name in services:
         _update_service_status(services[svc_name])
@@ -427,6 +583,19 @@ def launch_server(req: LaunchRequest):
 
 @app.post("/api/services/{name}/stop")
 def stop_service(name: str):
+    # Docker mode: stop the Docker container
+    if _detect_docker_mode():
+        docker_services = _get_docker_services()
+        docker_svc = None
+        for ds in docker_services:
+            if ds["name"] == name:
+                docker_svc = ds.get("docker_service")
+                break
+        if not docker_svc:
+            raise HTTPException(404, f"Service '{name}' not found in Docker")
+        result = _docker_compose_cmd("stop", docker_svc)
+        return {"status": "stopped", "name": name, "docker": True, **result}
+
     if name not in services:
         raise HTTPException(404, f"Service '{name}' not found")
 
@@ -449,6 +618,19 @@ def stop_service(name: str):
 
 @app.post("/api/services/{name}/restart")
 def restart_service(name: str):
+    # Docker mode: restart the Docker container
+    if _detect_docker_mode():
+        docker_services = _get_docker_services()
+        docker_svc = None
+        for ds in docker_services:
+            if ds["name"] == name:
+                docker_svc = ds.get("docker_service")
+                break
+        if not docker_svc:
+            raise HTTPException(404, f"Service '{name}' not found in Docker")
+        result = _docker_compose_cmd("restart", docker_svc)
+        return {"status": "restarted", "name": name, "docker": True, **result}
+
     if name not in services:
         raise HTTPException(404, f"Service '{name}' not found")
 
@@ -474,6 +656,18 @@ def restart_service(name: str):
 
 @app.get("/api/services/{name}/logs")
 def get_logs(name: str, tail: int = 200):
+    # Docker mode: fetch logs from Docker container
+    if _detect_docker_mode():
+        docker_services = _get_docker_services()
+        docker_svc = None
+        for ds in docker_services:
+            if ds["name"] == name:
+                docker_svc = ds.get("docker_service")
+                break
+        if docker_svc:
+            lines = _get_docker_logs(docker_svc, tail=tail)
+            return {"name": name, "lines": lines, "docker": True}
+
     if name not in services:
         raise HTTPException(404, f"Service '{name}' not found")
 
@@ -520,6 +714,11 @@ async def stream_logs(name: str):
 
 @app.post("/api/launch-all")
 def launch_all():
+    # Docker mode: start all containers
+    if _detect_docker_mode():
+        result = _docker_compose_cmd("start")
+        return {"results": [{"service": "all", "docker": True, **result}]}
+
     results = []
 
     proxy_info = services.get("proxy")
@@ -533,23 +732,17 @@ def launch_all():
     else:
         results.append({"service": "proxy", "status": "already running"})
 
-    topic_map = {
-        "data-processing": {
-            "topic": "TOPIC_DATA_PROCESSING",
-            "description": "Data processing server",
-        },
-        "code-analysis": {
-            "topic": "TOPIC_CODE_ANALYSIS",
-            "description": "Code analysis server",
-        },
-    }
-
-    for folder_name, cfg in topic_map.items():
-        skills_path = SKILLS_DIR / folder_name
-        if not skills_path.exists():
+    # Dynamically scan skill folders instead of hardcoding
+    for entry in sorted(SKILLS_DIR.iterdir()):
+        if not entry.is_dir() or entry.name.startswith((".", "_")):
+            continue
+        if not (entry / "AGENTS.md").exists():
             continue
 
+        folder_name = entry.name
+        topic = f"TOPIC_{folder_name.upper().replace('-', '_')}"
         svc_name = f"server-{folder_name}"
+
         if svc_name in services:
             _update_service_status(services[svc_name])
             if services[svc_name].status == "running":
@@ -558,9 +751,9 @@ def launch_all():
 
         try:
             result = launch_server(LaunchRequest(
-                topic=cfg["topic"],
-                skills_dir=str(skills_path),
-                description=cfg["description"],
+                topic=topic,
+                skills_dir=str(entry),
+                description=f"{folder_name} server",
             ))
             results.append({"service": svc_name, **result})
         except HTTPException as e:
@@ -571,6 +764,11 @@ def launch_all():
 
 @app.post("/api/stop-all")
 def stop_all():
+    # Docker mode: stop all containers
+    if _detect_docker_mode():
+        result = _docker_compose_cmd("stop")
+        return {"results": [{"service": "all", "docker": True, **result}]}
+
     results = []
     for name in list(services.keys()):
         _update_service_status(services[name])
@@ -590,6 +788,7 @@ def get_config():
     from dotenv import load_dotenv
     load_dotenv(PROJECT_ROOT / ".env")
 
+    docker_mode = _detect_docker_mode()
     return {
         "project_root": str(PROJECT_ROOT),
         "skills_dir": str(SKILLS_DIR),
@@ -602,6 +801,7 @@ def get_config():
         "llm_model": os.getenv(
             f"{os.getenv('LLM_PROVIDER', 'azure').upper()}_MODEL", "unknown"
         ),
+        "docker_mode": docker_mode,
     }
 
 
@@ -655,8 +855,10 @@ async def chat_endpoint(req: ChatRequest):
     )
 
     agent = await _get_agent()
+    raw_response = {}
     try:
-        result = await agent.publish(topic, req.message, timeout=req.timeout)
+        raw_response = await agent.publish_raw(topic, req.message, timeout=req.timeout)
+        result = raw_response.get("content", "")
         zmq_span.finish({
             "status": "success",
             "response_size_bytes": len(result.encode()) if result else 0,
@@ -684,13 +886,21 @@ async def chat_endpoint(req: ChatRequest):
 
     trace.add_span(zmq_span)
 
-    # 4. Parse C++ server logs for skill_server and skill_exec spans
-    try:
-        server_spans = _parse_server_logs_for_topic(topic)
+    # 4. Build skill_server + skill_exec spans from _trace metadata
+    #    (sent inline by the C++ skill server in the ZMQ response)
+    trace_meta = raw_response.get("_trace", {})
+    if trace_meta:
+        server_spans = _build_spans_from_trace(trace_meta, topic)
         for sp in server_spans:
             trace.add_span(sp)
-    except Exception:
-        pass
+    else:
+        # Fallback: scrape C++ log files for older servers without _trace
+        try:
+            server_spans = _parse_server_logs_for_topic(topic)
+            for sp in server_spans:
+                trace.add_span(sp)
+        except Exception:
+            pass
 
     trace.result = result
     trace.status = "success"
@@ -709,6 +919,52 @@ async def chat_endpoint(req: ChatRequest):
         "routed_by": routing_span.details.get("routed_by", "llm"),
         "trace_id": trace.trace_id,
     }
+
+
+def _build_spans_from_trace(trace_meta: dict, topic: str) -> list[TraceSpan]:
+    """Build skill_server + skill_exec TraceSpans from the C++ _trace metadata."""
+    spans = []
+
+    skill_name = trace_meta.get("skill_name", "unknown")
+    matcher_mode = trace_meta.get("matcher_mode", "unknown")
+    exec_logs = trace_meta.get("exec_logs", [])
+    elapsed_ms = trace_meta.get("elapsed_ms", 0)
+    exit_code = trace_meta.get("exit_code", -1)
+    stderr = trace_meta.get("stderr", "")
+    execution_method = trace_meta.get("execution_method", "")
+
+    # Skill Server span (matching + dispatch)
+    server_details = {
+        "topic": topic,
+        "matcher_mode": matcher_mode,
+        "skill_matched": skill_name,
+        "exec_logs": exec_logs,
+    }
+    spans.append(TraceSpan(
+        name=f"Skill Server ({topic})",
+        phase="skill_server",
+        details=server_details,
+    ))
+
+    # Skill Execution span
+    exec_details = {
+        "skill_name": skill_name,
+        "execution_method": execution_method,
+        "exit_code": exit_code,
+        "elapsed_ms": elapsed_ms,
+    }
+    if stderr:
+        exec_details["stderr"] = stderr
+    exec_details["exec_logs"] = exec_logs
+
+    spans.append(TraceSpan(
+        name=f"Skill Execution ({skill_name})",
+        phase="skill_exec",
+        duration_ms=elapsed_ms,
+        details=exec_details,
+    ))
+
+    return spans
 
 
 def _parse_server_logs_for_topic(topic: str) -> list[TraceSpan]:

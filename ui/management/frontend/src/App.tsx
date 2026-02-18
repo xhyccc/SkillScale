@@ -25,6 +25,9 @@ interface Service {
   matcher: string
   log_file: string | null
   started_at: number | null
+  docker?: boolean
+  docker_service?: string
+  docker_health?: string | null
 }
 
 interface Config {
@@ -37,6 +40,7 @@ interface Config {
   python: string
   llm_provider: string
   llm_model: string
+  docker_mode?: boolean
 }
 
 interface TopicSkill {
@@ -185,16 +189,40 @@ function TraceViewer({ trace }: { trace: Trace }) {
 
               {expanded[idx] && (
                 <div className="waterfall-details" onClick={e => e.stopPropagation()}>
-                  {Object.entries(span.details).map(([key, value]) => (
-                    <div key={key} className="detail-row">
-                      <span className="detail-key">{key}:</span>
-                      <span className="detail-value">
-                        {typeof value === 'object'
-                          ? JSON.stringify(value, null, 2)
-                          : String(value)}
-                      </span>
-                    </div>
-                  ))}
+                  {Object.entries(span.details).map(([key, value]) => {
+                    // Render exec_logs as a log console
+                    if (key === 'exec_logs' && Array.isArray(value) && value.length > 0) {
+                      return (
+                        <div key={key} className="detail-row detail-logs">
+                          <span className="detail-key">Execution Logs:</span>
+                          <pre className="exec-log-block">
+                            {(value as string[]).map((line, i) => (
+                              <div key={i} className="exec-log-line">{line}</div>
+                            ))}
+                          </pre>
+                        </div>
+                      )
+                    }
+                    // Render stderr with warning styling
+                    if (key === 'stderr' && typeof value === 'string' && value.trim()) {
+                      return (
+                        <div key={key} className="detail-row detail-stderr">
+                          <span className="detail-key">stderr:</span>
+                          <pre className="stderr-block">{value}</pre>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div key={key} className="detail-row">
+                        <span className="detail-key">{key}:</span>
+                        <span className="detail-value">
+                          {typeof value === 'object'
+                            ? JSON.stringify(value, null, 2)
+                            : String(value)}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -223,6 +251,7 @@ function App() {
   // Dashboard state
   const [folders, setFolders] = useState<SkillFolder[]>([])
   const [services, setServices] = useState<Service[]>([])
+  const [dockerMode, setDockerMode] = useState(false)
   const [logLines, setLogLines] = useState<string[]>([])
   const [activeLog, setActiveLog] = useState<string | null>(null)
   const [loading, setLoading] = useState<Record<string, boolean>>({})
@@ -250,7 +279,9 @@ function App() {
         fetch(`${API}/config`),
       ])
       setFolders((await foldersRes.json()).folders || [])
-      setServices((await servicesRes.json()).services || [])
+      const svcData = await servicesRes.json()
+      setServices(svcData.services || [])
+      setDockerMode(svcData.docker_mode || false)
       setConfig(await configRes.json())
     } catch (e) {
       console.error('Failed to fetch:', e)
@@ -466,6 +497,9 @@ function App() {
           {config && (
             <span className="config-badge">{config.llm_provider} / {config.llm_model}</span>
           )}
+          {dockerMode && (
+            <span className="config-badge" style={{ background: '#3b82f6' }}>Docker</span>
+          )}
         </div>
         <div className="header-tabs">
           <TabButton active={activeTab === 'dashboard'} label="Dashboard" onClick={() => setActiveTab('dashboard')} />
@@ -508,6 +542,7 @@ function App() {
                   </button>
                 )}
                 {proxyService?.pid && <span className="pid-label">PID: {proxyService.pid}</span>}
+                {proxyService?.docker && <span className="pid-label" style={{ color: '#3b82f6' }}>🐳 Docker</span>}
               </div>
             </div>
           </section>
@@ -550,6 +585,7 @@ function App() {
                         </button>
                       )}
                       {svc?.pid && <span className="pid-label">PID: {svc.pid}</span>}
+                      {svc?.docker && <span className="pid-label" style={{ color: '#3b82f6' }}>🐳 Docker</span>}
                     </div>
                   </div>
                 )

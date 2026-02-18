@@ -1,0 +1,28 @@
+# Build artifacts
+skill-server/build/
+proxy/build/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+skillscale.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+
+# Docker (keep entrypoints and cppzmq headers)
+
+# Tests
+tests/__pycache__/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store

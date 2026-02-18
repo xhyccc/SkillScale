@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# ────────────────────────────────────────────────────────────
+# opencode-exec — Execute a SkillScale skill using OpenCode
+#
+# This script bridges the C++ skill server with OpenCode's AI
+# agent capabilities. OpenCode reads the project's AGENTS.md
+# to discover available skills and decide which to use.
+#
+# Two modes:
+#   Direct dispatch (default):
+#     echo "user intent" | scripts/opencode-exec
+#     OpenCode reads AGENTS.md, picks the best skill, and executes it.
+#
+#   Hint mode:
+#     echo "user intent" | scripts/opencode-exec --hint <skill-name>
+#     OpenCode is given a hint about which skill to prefer.
+#
+#   Legacy explicit mode:
+#     echo "user intent" | scripts/opencode-exec <skill-name> [description]
+#     OpenCode executes a specific skill directly.
+#
+# Environment:
+#   OPENAI_API_KEY       — LLM provider API key (required)
+#   OPENAI_API_BASE      — LLM provider base URL (optional)
+#   SKILLSCALE_TIMEOUT   — Execution timeout in seconds (default: 120)
+#
+# Requires: opencode (brew install anomalyco/tap/opencode)
+# ────────────────────────────────────────────────────────────
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Parse arguments ──
+MODE="direct"      # direct | hint | legacy
+HINT_SKILL=""
+SKILL_NAME=""
+SKILL_DESC=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --hint)
+            MODE="hint"
+            HINT_SKILL="${2:?--hint requires a skill name}"
+            shift 2
+            ;;
+        -*)
+            echo "Unknown flag: $1" >&2
+            exit 1
+            ;;
+        *)
+            # Legacy mode: opencode-exec <skill-name> [description]
+            MODE="legacy"
+            SKILL_NAME="$1"
+            SKILL_DESC="${2:-}"
+            shift $#
+            ;;
+    esac
+done
+
+# Detect Python venv — in containers, use system python3
+if [[ -f "$PROJECT_ROOT/.venv/bin/python3" ]]; then
+    VENV_PYTHON="${SKILLSCALE_PYTHON:-$PROJECT_ROOT/.venv/bin/python3}"
+else
+    VENV_PYTHON="${SKILLSCALE_PYTHON:-$(command -v python3)}"
+fi
+
+# Read user intent from stdin
+INTENT="$(cat)"
+
+if [[ -z "$INTENT" ]]; then
+    echo "Error: no input data received on stdin" >&2
+    exit 1
+fi
+
+# Ensure opencode is available
+if ! command -v opencode &>/dev/null; then
+    echo "Error: opencode not found. Install with: brew install anomalyco/tap/opencode" >&2
+    exit 1
+fi
+
+# ── Create temp file for skill output capture ──
+RESULT_FILE=$(mktemp /tmp/skillscale_result_XXXXXXXX)
+trap 'rm -f "$RESULT_FILE"' EXIT
+
+# ── Build the prompt for OpenCode ──
+# OpenCode reads AGENTS.md automatically. In direct mode, it decides
+# which skill to use. In hint/legacy mode, we suggest/specify a skill.
+
+if [[ "$MODE" == "direct" ]]; then
+    # Direct dispatch — OpenCode reads AGENTS.md and decides which skill to use
+    PROMPT="You are a skill execution agent for the SkillScale distributed skill system.
+
+TASK: Read AGENTS.md to see available skills, choose the best one for the user's request, and execute it.
+
+INSTRUCTIONS:
+1. Read AGENTS.md at the project root to discover available skills
+2. Each skill has a SKILL.md and a scripts/run.py
+3. Choose the skill that best matches the user's request
+4. Read that skill's SKILL.md to understand how it works
+5. Run the skill's scripts/run.py with the user's input piped to stdin:
+   echo '<INPUT>' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
+   Replace <INPUT> with the actual user input (properly escaped) and <SKILL_NAME> with the chosen skill name.
+6. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+7. After running, say 'Done' — nothing else
+
+USER REQUEST:
+${INTENT}"
+
+elif [[ "$MODE" == "hint" ]]; then
+    # Hint mode — suggest a skill but let OpenCode decide
+    PROMPT="You are a skill execution agent for the SkillScale distributed skill system.
+
+TASK: Execute a skill to handle the user's request. The suggested skill is '${HINT_SKILL}', but read AGENTS.md to verify this is the best choice.
+
+INSTRUCTIONS:
+1. Read AGENTS.md at the project root to discover available skills
+2. Verify that '${HINT_SKILL}' is the best match, or choose a better one
+3. Read the chosen skill's SKILL.md to understand how it works
+4. Run the skill's scripts/run.py with the user's input piped to stdin:
+   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
+   Replace <SKILL_NAME> with the chosen skill name.
+5. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+6. After running, say 'Done' — nothing else
+
+USER REQUEST:
+${INTENT}"
+
+else
+    # Legacy mode — explicit skill execution
+    PROMPT="You are a skill execution agent for the SkillScale distributed skill system.
+
+TASK: Execute the '${SKILL_NAME}' skill and save its output to a file.
+
+SKILL: ${SKILL_NAME}
+${SKILL_DESC:+DESCRIPTION: ${SKILL_DESC}}
+SKILL LOCATION: .claude/skills/${SKILL_NAME}/
+
+INSTRUCTIONS:
+1. Read the skill's SKILL.md at .claude/skills/${SKILL_NAME}/SKILL.md to understand what it does
+2. The skill has a scripts/run.py that accepts input on stdin
+3. Run this EXACT command (do NOT modify it):
+   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/${SKILL_NAME}/scripts/run.py > ${RESULT_FILE} 2>&1
+4. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+5. After running, say 'Done' — nothing else
+
+USER INPUT:
+${INTENT}"
+fi
+
+# ── Execute via OpenCode in non-interactive mode ──
+cd "$PROJECT_ROOT"
+
+# Source .env for API keys if available
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    set -a
+    source "$PROJECT_ROOT/.env" 2>/dev/null || true
+    set +a
+fi
+
+# Run opencode — discard its stdout/stderr, we capture via temp file
+opencode run "$PROMPT" > /dev/null 2>&1
+OC_EXIT=$?
+
+# Output the captured skill result to stdout
+if [[ -s "$RESULT_FILE" ]]; then
+    cat "$RESULT_FILE"
+else
+    # Fallback: if temp file is empty and we know the skill, try direct execution
+    if [[ -n "$SKILL_NAME" ]]; then
+        echo "OpenCode did not produce output. Running skill directly..." >&2
+        echo "$INTENT" | PYTHONPATH="$PROJECT_ROOT/skills" "$VENV_PYTHON" \
+            "$PROJECT_ROOT/.claude/skills/${SKILL_NAME}/scripts/run.py" 2>&1 || true
+    elif [[ -n "$HINT_SKILL" ]]; then
+        echo "OpenCode did not produce output. Running hinted skill directly..." >&2
+        echo "$INTENT" | PYTHONPATH="$PROJECT_ROOT/skills" "$VENV_PYTHON" \
+            "$PROJECT_ROOT/.claude/skills/${HINT_SKILL}/scripts/run.py" 2>&1 || true
+    else
+        echo "Error: OpenCode did not produce output and no skill fallback available" >&2
+        exit 1
+    fi
+fi
+
+exit $OC_EXIT

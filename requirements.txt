@@ -1,0 +1,25 @@
+# SkillScale — Unified Python Dependencies
+#
+# Install: pip install -r requirements.txt
+# (Individual component requirements.txt files still exist for
+#  Docker / CI jobs that only need a subset.)
+#
+# NOTE: npm dependencies (openskills CLI) are in package.json.
+#       Run `npm install` to install them separately.
+
+# Core (agent + SDK)
+pyzmq>=25.0
+pyyaml>=6.0
+uuid6>=2024.1.12
+aiohttp>=3.9
+
+# UI (management + chat + traces)
+fastapi>=0.100.0
+uvicorn>=0.20.0
+python-dotenv>=1.0.0
+openai>=1.0.0
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-timeout>=2.2

@@ -32,6 +32,7 @@ struct OutgoingResponse {
     std::string status;      // "success" | "error" | "timeout"
     std::string content;     // markdown result
     std::string error;       // error description if failed
+    json trace_meta;         // execution metadata for UI tracing
 };
 
 class MessageHandler {

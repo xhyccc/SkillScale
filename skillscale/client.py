@@ -36,7 +36,7 @@ class ClientConfig:
         default_factory=lambda: f"AGENT_REPLY_{uuid.uuid4().hex[:8]}"
     )
     hwm: int = 10_000                           # ZMQ high-water mark
-    default_timeout: float = 30.0               # seconds
+    default_timeout: float = 180.0              # seconds
     heartbeat_ivl: int = 5000                   # ms
     settle_time: float = 0.5                    # sec — subscription propagation
     stale_multiplier: float = 2.0               # GC stale requests after N×timeout
@@ -47,7 +47,7 @@ class ClientConfig:
             proxy_xsub=os.getenv("SKILLSCALE_PROXY_XSUB", cls.proxy_xsub),
             proxy_xpub=os.getenv("SKILLSCALE_PROXY_XPUB", cls.proxy_xpub),
             default_timeout=float(
-                os.getenv("SKILLSCALE_TIMEOUT", str(cls.default_timeout))
+                os.getenv("PUBLISH_TIMEOUT", str(cls.default_timeout))
             ),
         )
 
@@ -236,7 +236,63 @@ class SkillScaleClient:
 
         try:
             result = await asyncio.wait_for(future, timeout=timeout)
+            # Support both dict payloads (from real C++ server) and
+            # plain strings (from mocks / older servers)
+            if isinstance(result, dict):
+                return result.get("content", "")
             return result
+        except asyncio.TimeoutError:
+            log.warning("Timeout (req=%s, topic=%s)", request_id[:8], topic)
+            self._pending.pop(request_id, None)
+            raise
+
+    async def invoke_raw(
+        self,
+        topic: str,
+        intent: str,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Like invoke() but returns the full response payload dict,
+        including ``_trace`` metadata from the C++ skill server.
+
+        Returns:
+            Dict with keys: request_id, status, content, error,
+            timestamp, and optionally _trace.
+        """
+        if not self._running:
+            raise ConnectionError("Client is not connected. Call connect() first.")
+
+        timeout = timeout or self.config.default_timeout
+        request_id = uuid.uuid4().hex
+
+        payload = json.dumps({
+            "request_id": request_id,
+            "reply_to": self.config.client_id,
+            "intent": intent,
+            "timestamp": time.time(),
+        })
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._pending[request_id] = _PendingRequest(
+            request_id=request_id,
+            topic=topic,
+            intent=intent,
+            future=future,
+        )
+
+        await self._pub.send_multipart([
+            topic.encode("utf-8"),
+            payload.encode("utf-8"),
+        ])
+        log.info("Published intent to %s (req=%s)", topic, request_id[:8])
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            if isinstance(result, dict):
+                return result
+            return {"content": result, "status": "success"}
         except asyncio.TimeoutError:
             log.warning("Timeout (req=%s, topic=%s)", request_id[:8], topic)
             self._pending.pop(request_id, None)
@@ -362,7 +418,7 @@ class SkillScaleClient:
                         pending = self._pending.pop(request_id)
                         if not pending.future.done():
                             if status == "success":
-                                pending.future.set_result(content)
+                                pending.future.set_result(payload)
                             else:
                                 pending.future.set_exception(
                                     RuntimeError(f"Skill error: {error}")

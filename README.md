@@ -2,7 +2,7 @@
 
 A middleware SDK and distributed infrastructure for executing AI agent skills at scale.
 C++ Skill Servers discover and execute skills using the
-[OpenSkills](https://github.com/numman-ali/openskills) `AGENTS.md` format over a
+[OpenSkills](https://github.com/numman-ali/openskills) standard over a
 ZeroMQ pub/sub bus. Skill matching is **LLM-powered by default** (with keyword fallback),
 and skills themselves call LLMs for intelligent analysis. Any agent framework —
 **LangChain, LangGraph, CrewAI**, or your own — plugs into the middleware through
@@ -52,17 +52,30 @@ thin adapters.
 5. **Response** — Results are published back on the agent's ephemeral reply topic
    (`AGENT_REPLY_<id>`).
 
-### OpenSkills Discovery Flow
+### OpenSkills Integration
 
-```
-Skill server starts
-  → parses skills/<topic>/AGENTS.md
-  → extracts <available_skills> XML
-  → task arrives on ZMQ topic
-  → LLM matching (default) or keyword scoring
-  → openskills CLI loads SKILL.md (progressive disclosure)
-  → scripts/run.py executed with task data on stdin
-  → result published back via ZMQ
+SkillScale uses the official [npm openskills](https://www.npmjs.com/package/openskills)
+CLI for skill management — the same system used by Claude Code, Cursor, Windsurf, and
+other AI coding agents.
+
+```bash
+# Install skills from any source
+npx openskills install anthropics/skills        # From Anthropic marketplace
+npx openskills install ./skills/data-processing/csv-analyzer  # From local path
+npx openskills install your-org/your-skills     # From GitHub repo
+
+# Manage skills
+npx openskills list                             # List installed skills
+npx openskills read <skill-name>                # Load skill content (progressive disclosure)
+npx openskills sync                             # Regenerate AGENTS.md
+
+# Runtime flow (C++ skill server uses these internally)
+# Skill server starts → parses AGENTS.md <available_skills> XML
+#   → task arrives on ZMQ topic
+#   → LLM matching (default) or keyword scoring
+#   → npx openskills read <name> loads SKILL.md (progressive disclosure)
+#   → scripts/run.py executed with task data on stdin
+#   → result published back via ZMQ
 ```
 
 ## Dual Intent Modes
@@ -88,6 +101,22 @@ result = await client.invoke_task("TOPIC_DATA_PROCESSING", "summarize this artic
 # Mode 2 — plain text also works
 result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b\n1,2")
 ```
+
+## Web UI
+
+SkillScale includes a unified management and testing interface:
+
+```bash
+./launch_ui.sh       # Starts everything + opens browser
+```
+
+| Tab | Description |
+|-----|-------------|
+| **Dashboard** | Launch/stop/restart proxy and skill servers, view logs and configuration |
+| **Chat Testing** | Send test messages to any topic, see results with inline request traces |
+| **Traces** | Full request lifecycle view with waterfall timing charts across all phases |
+
+The UI runs on `http://localhost:3001` (frontend) with the API on `http://localhost:8401`.
 
 ## Project Structure
 
@@ -115,7 +144,7 @@ SkillScale/
 │   ├── message_handler.cpp/h   # JSON envelope serialization
 │   └── CMakeLists.txt
 ├── scripts/                    # Shared tooling
-│   ├── openskills              # OpenSkills CLI (list/read/sync)
+│   ├── openskills              # Thin wrapper → npx openskills (npm CLI)
 │   ├── llm_match.py            # LLM-powered skill matching (Python subprocess)
 │   └── prompts/
 │       └── skill_match.txt     # Configurable prompt template for LLM matching
@@ -132,22 +161,18 @@ SkillScale/
 │       ├── AGENTS.md           # OpenSkills discovery manifest
 │       ├── code-complexity/    # SKILL.md + scripts/run.py
 │       └── dead-code-detector/ # SKILL.md + scripts/run.py
+├── ui/                         # Unified web interface
+│   └── management/
+│       ├── server.py           # FastAPI backend (API + chat + tracing)
+│       └── frontend/           # React + Vite frontend (3 tabs)
 ├── tests/                      # 34 integration & fault-tolerance tests
-│   ├── conftest.py
-│   ├── test_01_proxy.py
-│   ├── test_02_agent_e2e.py
-│   ├── test_03_skills.py
-│   └── test_04_fault_tolerance.py
 ├── docker/                     # Multi-stage Dockerfiles
 ├── k8s/                        # Kubernetes manifests + CRDs + KEDA
-├── .env.example                # LLM provider config template
-├── pyproject.toml              # SDK packaging (pip install skillscale)
-├── docker-compose.yml
-├── AGENTS.md                   # Root-level OpenSkills agent instructions
-├── setup.sh
-├── launch_all.sh
-├── run_e2e.sh
-└── test_e2e_live.py
+├── package.json                # npm openskills dependency
+├── requirements.txt            # All Python dependencies (unified)
+├── setup.sh                    # One-command install
+├── launch_ui.sh                # Launch everything + open browser
+└── launch_all.sh               # Launch services + run E2E test
 ```
 
 ## Components
@@ -157,10 +182,11 @@ SkillScale/
 | **skillscale/** | Python 3.10+ | **Middleware SDK** — core ZMQ client, skill discovery, and framework adapters (LangChain, LangGraph, CrewAI) |
 | **proxy/** | C++17 | XPUB/XSUB stateless message switch with Prometheus metrics on `:9100` |
 | **skill-server/** | C++17 | Multi-threaded subscriber; parses `AGENTS.md` for OpenSkills discovery; matches tasks via LLM (default) or keyword scoring; executes skills via POSIX `fork`/`exec` with configurable timeouts |
-| **scripts/** | Python + Shell | OpenSkills CLI (`openskills`), LLM skill matcher (`llm_match.py`), configurable prompt templates |
+| **scripts/** | Python + Shell | `npx openskills` wrapper, LLM skill matcher (`llm_match.py`), configurable prompt templates |
 | **agent/** | Python 3.10+ | Standalone CLI agent built on the SDK; LLM-powered topic routing |
 | **examples/** | Python | Working examples: direct client, LangChain agent, LangGraph graph |
 | **skills/** | Markdown + Python | `AGENTS.md` discovery manifests, `SKILL.md` metadata, `scripts/run.py` LLM-powered executables, shared `llm_utils.py` |
+| **ui/** | Python + React | Unified management UI — Dashboard (service control), Chat Testing (interactive), Traces (request lifecycle waterfall) |
 | **tests/** | Python (pytest) | 34 tests covering proxy routing, agent E2E, skill execution, and fault tolerance |
 | **k8s/** | YAML | Namespace, Deployments, Services, SkillTopic CRD, KEDA ScaledObjects |
 
@@ -196,12 +222,41 @@ Set `LLM_PROVIDER=azure|openai|zhipu` in `.env` to select the active provider.
 
 | Dependency | macOS (Homebrew) | Ubuntu/Debian |
 |------------|------------------|---------------|
-| CMake ≥ 3.16 | `brew install cmake` | `apt install cmake` |
+| CMake >= 3.16 | `brew install cmake` | `apt install cmake` |
 | libzmq | `brew install zeromq` | `apt install libzmq3-dev` |
 | cppzmq | `brew install cppzmq` | `apt install libzmq3-dev` (headers included) |
 | nlohmann-json | `brew install nlohmann-json` | `apt install nlohmann-json3-dev` |
 | pkg-config | `brew install pkg-config` | `apt install pkg-config` |
-| Python ≥ 3.10 | `brew install python` | `apt install python3 python3-venv` |
+| Python >= 3.10 | `brew install python` | `apt install python3 python3-venv` |
+| Node.js >= 20.6 | `brew install node` | `apt install nodejs npm` |
+
+### One-Command Install
+
+```bash
+chmod +x setup.sh && ./setup.sh
+```
+
+This does everything:
+- Creates a Python virtual environment and installs all dependencies
+- Installs the `openskills` npm CLI and registers all 4 skills
+- Generates `AGENTS.md` files via `npx openskills sync`
+- Builds both C++ binaries (proxy + skill server)
+- Installs the `skillscale` SDK in development mode
+
+### One-Command Launch (with UI)
+
+```bash
+chmod +x launch_ui.sh && ./launch_ui.sh
+```
+
+This starts **everything** and opens the browser:
+- C++ XPUB/XSUB proxy
+- 2 C++ skill servers (data-processing + code-analysis)
+- FastAPI backend (port 8401)
+- React frontend (port 3001)
+- Opens `http://localhost:3001` in your browser
+
+Press `Ctrl+C` to stop all services.
 
 ### Install the SDK
 
@@ -216,35 +271,9 @@ pip install -e ".[crewai]"        # CrewAI support
 pip install -e ".[all]"           # everything
 ```
 
-### Automated Setup (C++ build + Python deps)
+### Run Locally (manual)
 
-```bash
-chmod +x setup.sh && ./setup.sh
-```
-
-This installs Python packages, checks for C/C++ dependencies, and builds both C++ binaries.
-
-### Manual Build
-
-```bash
-# Build proxy
-cd proxy && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../..
-
-# Build skill server
-cd skill-server && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../..
-```
-
-Binaries are output to `proxy/build/skillscale_proxy` and
-`skill-server/build/skillscale_skill_server`.
-
-### Run Locally
-
-```bash
-# All-in-one launcher (starts proxy + 2 skill servers + runs E2E test)
-chmod +x launch_all.sh && ./launch_all.sh
-```
-
-Or start each component manually in separate terminals:
+Start each component in separate terminals:
 
 ```bash
 # Terminal 1: XPUB/XSUB Proxy
@@ -299,12 +328,8 @@ The test suite spins up an in-process ZeroMQ proxy and mock skill servers automa
 ### Live E2E Test (requires running C++ services)
 
 ```bash
-# Start services, then:
 python3 test_e2e_live.py
 ```
-
-Sends real requests through the full stack:
-Python Agent → C++ Proxy → C++ Skill Server → LLM match → subprocess → response.
 
 ## Configuration
 
@@ -316,16 +341,12 @@ Python Agent → C++ Proxy → C++ Skill Server → LLM match → subprocess →
 | `SKILLSCALE_MATCHER` | `llm` | skill-server | Skill matching strategy: `llm` (default) or `keyword` |
 | `SKILLSCALE_PROMPT_FILE` | `""` | skill-server | Custom prompt template for LLM matching |
 | `SKILLSCALE_PYTHON` | `python3` | skill-server | Python executable path for LLM subprocess |
-| `SKILLSCALE_PROXY_XSUB` | `tcp://127.0.0.1:5444` | agent, skill-server | Proxy XSUB endpoint (publishers connect here) |
-| `SKILLSCALE_PROXY_XPUB` | `tcp://127.0.0.1:5555` | agent, skill-server | Proxy XPUB endpoint (subscribers connect here) |
+| `SKILLSCALE_PROXY_XSUB` | `tcp://127.0.0.1:5444` | agent, skill-server | Proxy XSUB endpoint |
+| `SKILLSCALE_PROXY_XPUB` | `tcp://127.0.0.1:5555` | agent, skill-server | Proxy XPUB endpoint |
 | `SKILLSCALE_TOPIC` | `TOPIC_DEFAULT` | skill-server | ZeroMQ topic to subscribe to |
-| `SKILLSCALE_DESCRIPTION` | `""` | skill-server | Human-readable server description |
 | `SKILLSCALE_SKILLS_DIR` | `./skills` | skill-server | Directory containing skill subdirectories |
 | `SKILLSCALE_WORKERS` | `2` | skill-server | Number of worker threads |
 | `SKILLSCALE_TIMEOUT` | `30000` / `30` | skill-server (ms) / agent (s) | Skill execution / request timeout |
-| `SKILLSCALE_XSUB_PORT` | `5444` | proxy | XSUB bind port |
-| `SKILLSCALE_XPUB_PORT` | `5555` | proxy | XPUB bind port |
-| `SKILLSCALE_METRICS_PORT` | `9100` | proxy | Prometheus metrics port |
 
 ### Skill Server CLI Arguments
 
@@ -344,42 +365,28 @@ Python Agent → C++ Proxy → C++ Skill Server → LLM match → subprocess →
   --timeout <MS>          Skill execution timeout in ms (default: 30000)
 ```
 
-### Skill Matching Modes
-
-| Mode | Flag | Description |
-|------|------|-------------|
-| **LLM** (default) | `--matcher llm` | Calls `scripts/llm_match.py` via Python subprocess. Uses the configured LLM provider to semantically match tasks to skills. Falls back to keyword on failure. |
-| **Keyword** | `--matcher keyword` | Pure C++ keyword scoring against skill names and descriptions from `AGENTS.md`. No LLM required. |
-
-The LLM matcher uses the prompt template at `scripts/prompts/skill_match.txt`, which can
-be customized via `--prompt-file`.
-
 ## Message Protocol
 
 All messages use ZeroMQ multipart frames with JSON payloads.
 
-**Request** (Agent → Skill Server):
+**Request** (Agent -> Skill Server):
 ```
 Frame 0: "TOPIC_DATA_PROCESSING"          # topic prefix for routing
 Frame 1: {                                 # JSON payload
   "request_id": "a1b2c3d4",
   "reply_to":   "AGENT_REPLY_9f8e7d6c",
-  "intent":     "...",                     # Mode 1 or Mode 2 (see below)
+  "intent":     "...",                     # Mode 1 or Mode 2
   "timestamp":  1739836800.123
 }
-
-# Mode 1 (explicit):    intent = '{"skill":"csv-analyzer","data":"name,age\\nAlice,30"}'
-# Mode 2 (task-based):  intent = '{"task":"analyze this CSV data..."}'
-# Mode 2 (plain text):  intent = 'analyze this CSV data: name,age\nAlice,30'
 ```
 
-**Response** (Skill Server → Agent):
+**Response** (Skill Server -> Agent):
 ```
 Frame 0: "AGENT_REPLY_9f8e7d6c"           # reply_to topic from request
 Frame 1: {                                 # JSON payload
   "request_id": "a1b2c3d4",
   "status":     "success",
-  "content":    "## CSV Analysis\n\n**Rows:** 1 | **Columns:** 2\n..."
+  "content":    "## CSV Analysis\n..."
 }
 ```
 
@@ -388,14 +395,6 @@ Frame 1: {                                 # JSON payload
 ```bash
 kubectl apply -f k8s/
 ```
-
-Manifests create:
-- `skillscale` namespace
-- Proxy Deployment + two ClusterIP Services (`:5444`, `:5555`)
-- `SkillTopic` CustomResourceDefinition
-- SkillTopic instances for `data-processing` and `code-analysis`
-- KEDA ScaledObjects for event-driven autoscaling of skill servers
-- Agent Deployment
 
 ## Using the Middleware SDK
 
@@ -430,76 +429,38 @@ client = SkillScaleClient()
 await client.connect()
 
 toolkit = SkillScaleToolkit.from_skills_dir(client, "./skills")
-tools = toolkit.get_tools()       # Mode 1: one tool per skill (explicit)
-task_tools = toolkit.get_task_tools()  # Mode 2: one tool per topic (task-based)
-all_tools = toolkit.get_all_tools()    # both modes combined
-
-# Use with any LangChain agent
-agent = create_react_agent(llm, all_tools, prompt)
+tools = toolkit.get_tools()            # Mode 1: one tool per skill
+task_tools = toolkit.get_task_tools()  # Mode 2: one tool per topic
 ```
 
 ### LangGraph
 
 ```python
-from skillscale import SkillScaleClient
 from skillscale.adapters.langgraph import SkillScaleGraph
 
-client = SkillScaleClient()
-await client.connect()
-
 sg = SkillScaleGraph.from_skills_dir(client, "./skills")
-graph = sg.build_graph(llm=my_llm)  # Mode 1: LLM picks the skill
-
-# Or: Mode 2 — let the C++ server match skills via LLM
-graph = sg.build_graph(task_based=True)
-result = await graph.ainvoke({"input": "summarize this text..."})
+graph = sg.build_graph(llm=my_llm)     # Mode 1: LLM picks the skill
+graph = sg.build_graph(task_based=True) # Mode 2: C++ server matches via LLM
 ```
 
 ### CrewAI
 
 ```python
-from skillscale import SkillScaleClient
 from skillscale.adapters.crewai import SkillScaleCrewTools
 
-client = SkillScaleClient()
-await client.connect()
-
 crew_tools = SkillScaleCrewTools.from_skills_dir(client, "./skills")
-tools = crew_tools.get_tools()          # Mode 1: explicit per-skill tools
-task_tools = crew_tools.get_task_tools()  # Mode 2: task-based per-topic tools
-all_tools = crew_tools.get_all_tools()    # both modes
-
-agent = Agent(role="analyst", tools=all_tools, ...)
-```
-
-### Skill Discovery (progressive disclosure)
-
-```python
-from skillscale import SkillDiscovery
-
-discovery = SkillDiscovery(
-    skills_root="./skills",
-    topic_descriptions={
-        "TOPIC_DATA_PROCESSING": "Data processing — summarization, CSV analysis",
-        "TOPIC_CODE_ANALYSIS": "Code analysis — complexity, metrics, static analysis",
-    },
-).scan()
-
-print(discovery.metadata_summary())   # inject into LLM system prompt
-print(discovery.list_topics())        # ["TOPIC_CODE_ANALYSIS", "TOPIC_DATA_PROCESSING"]
-
-for tm in discovery.list_topic_metadata():
-    print(f"{tm.topic}: {tm.description} — skills: {tm.skill_names()}")
+tools = crew_tools.get_all_tools()     # both modes
+agent = Agent(role="analyst", tools=tools, ...)
 ```
 
 ## Adding a New Skill
 
-1. Create a directory under the appropriate topic:
+1. Create a directory with the skill definition:
    ```
    skills/<category>/<skill-name>/
-   ├── SKILL.md
-   └── scripts/
-       └── run.py
+   +-- SKILL.md
+   +-- scripts/
+       +-- run.py
    ```
 
 2. Write `SKILL.md` with YAML frontmatter:
@@ -511,25 +472,20 @@ for tm in discovery.list_topic_metadata():
    compatibility: python3
    allowed-tools: python3
    ---
-
    # My New Skill
    ## Purpose
    ...
    ```
 
 3. Create `scripts/run.py` — reads from stdin, writes markdown to stdout.
-   Use `skills/llm_utils.py` for LLM calls:
-   ```python
-   from llm_utils import chat
-   result = chat("You are an expert.", user_input)
+
+4. Install and register via OpenSkills:
+   ```bash
+   npx openskills install ./skills/<category>/<skill-name>
+   npx openskills sync    # regenerate AGENTS.md
    ```
 
-4. Register the skill in the topic's `AGENTS.md` (add a `<skill>` entry to
-   `<available_skills>`).
-
-5. Update the root `AGENTS.md` with the new skill entry.
-
-6. The skill server auto-discovers skills on startup by parsing `AGENTS.md`.
+5. The skill server auto-discovers skills on startup by parsing `AGENTS.md`.
 
 ## License
 

@@ -1,5 +1,5 @@
 # ── Stage 1: Build C++ skill server ──
-FROM ubuntu:22.04 AS builder
+FROM docker.1ms.run/library/ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -9,41 +9,96 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cppzmq (header-only)
-ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq.hpp /usr/include/zmq.hpp
-ADD https://raw.githubusercontent.com/zeromq/cppzmq/v4.10.0/zmq_addon.hpp /usr/include/zmq_addon.hpp
+# Install cppzmq (header-only) — copied from local Homebrew install
+COPY docker/cppzmq/zmq.hpp /usr/include/zmq.hpp
+COPY docker/cppzmq/zmq_addon.hpp /usr/include/zmq_addon.hpp
 
 WORKDIR /build
 COPY skill-server/ .
 
 RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
 
-# ── Stage 2: Runtime ──
-FROM ubuntu:22.04
+# ── Stage 2: Download OpenCode for Linux ──
+FROM docker.1ms.run/library/ubuntu:22.04 AS opencode-dl
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG OPENCODE_VERSION=1.2.6
+
+# Map Docker TARGETARCH (amd64/arm64) to OpenCode release naming (x64/arm64)
+RUN ARCH_MAP=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") && \
+    curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${ARCH_MAP}.tar.gz" \
+    -o /tmp/opencode.tar.gz && \
+    mkdir -p /tmp/opencode && \
+    tar xzf /tmp/opencode.tar.gz -C /tmp/opencode && \
+    chmod +x /tmp/opencode/opencode
+
+# ── Stage 3: Runtime ──
+FROM docker.1ms.run/library/ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install runtime dependencies:
+#   libzmq5      — ZeroMQ for skill server
+#   python3/pip  — Skill scripts (run.py) and shared modules
+#   nodejs/npm   — OpenCode runtime + openskills CLI
+#   ripgrep      — Required by OpenCode for code search
+#   curl/ca-certs — Network access for LLM APIs
+#   bash/coreutils — Shell execution for opencode-exec
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
     python3 python3-pip \
     nodejs npm \
+    ripgrep \
+    curl ca-certificates \
     bash coreutils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages needed by skills
+RUN pip3 install --no-cache-dir openai python-dotenv requests
 
 # Install npm openskills CLI globally
 RUN npm install -g openskills
 
+# Copy C++ skill server binary
 COPY --from=builder /build/build/skillscale_skill_server /usr/local/bin/skillscale_skill_server
 
-# Default skills directory inside the container
-RUN mkdir -p /skills /app/.claude/skills
+# Copy OpenCode binary
+COPY --from=opencode-dl /tmp/opencode/opencode /usr/local/bin/opencode
 
+# Set up app directory structure
+WORKDIR /app
+
+# Copy OpenCode project config
+COPY opencode.json /app/opencode.json
+
+# Copy AGENTS.md (read by OpenCode for skill discovery)
+COPY AGENTS.md /app/AGENTS.md
+
+# Copy the opencode-exec bridge script
+COPY scripts/opencode-exec /app/scripts/opencode-exec
+RUN chmod +x /app/scripts/opencode-exec
+
+# Copy the entrypoint script
+COPY docker/entrypoint-skill-server.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Default skills directory inside the container
+RUN mkdir -p /skills /app/.claude/skills /app/skills
+
+# ── Environment defaults ──
 ENV SKILLSCALE_TOPIC=TOPIC_DEFAULT
 ENV SKILLSCALE_SKILLS_DIR=/skills
 ENV SKILLSCALE_PROXY_XPUB=tcp://proxy:5555
 ENV SKILLSCALE_PROXY_XSUB=tcp://proxy:5444
 ENV SKILLSCALE_HWM=10000
-ENV SKILLSCALE_TIMEOUT=30000
+ENV SKILLSCALE_TIMEOUT=180000
 ENV SKILLSCALE_WORKERS=2
 
-ENTRYPOINT ["skillscale_skill_server"]
+# OpenCode auth — set via env var, entrypoint writes auth.json
+# SILICONFLOW_API_KEY must be provided at runtime
+ENV SILICONFLOW_API_KEY=""
+
+ENTRYPOINT ["/app/entrypoint.sh"]

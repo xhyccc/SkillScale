@@ -445,6 +445,53 @@ body {
   font-family: 'SF Mono', Menlo, Monaco, monospace;
 }
 
+/* Execution logs block */
+.detail-logs {
+  flex-direction: column;
+}
+.exec-log-block {
+  margin: 6px 0 0 0;
+  padding: 10px;
+  background: #010409;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #8b949e;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.exec-log-line {
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.exec-log-line:hover {
+  color: #c9d1d9;
+  background: rgba(56, 139, 253, 0.1);
+}
+
+/* Stderr warning block */
+.detail-stderr {
+  flex-direction: column;
+}
+.stderr-block {
+  margin: 6px 0 0 0;
+  padding: 10px;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #f8514999;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 .trace-result {
   margin-top: 16px;
 }

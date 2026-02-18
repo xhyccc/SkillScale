@@ -90,6 +90,11 @@ class SkillScaleAgent:
                       timeout: Optional[float] = None) -> str:
         return await self._client.invoke(topic, intent, timeout)
 
+    async def publish_raw(self, topic: str, intent: str,
+                          timeout: Optional[float] = None) -> dict:
+        """Like publish() but returns the full response dict including _trace."""
+        return await self._client.invoke_raw(topic, intent, timeout)
+
     # ── Tool 2: respond(content) ───────────────────────────
 
     def respond(self, content: str) -> str:

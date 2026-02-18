@@ -22,6 +22,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -47,7 +48,7 @@ struct Config {
     std::string python      = "python3";     // Python executable for LLM subprocess
     int         hwm         = 10000;
     int         heartbeat   = 5000;   // ms
-    int         timeout     = 30000;  // skill execution timeout ms
+    int         timeout     = 180000;  // skill execution timeout ms (via SKILLSCALE_TIMEOUT)
     int         workers     = 2;      // concurrent skill execution threads
 };
 
@@ -78,6 +79,7 @@ static Config parse_args(int argc, char* argv[]) {
         else if (key == "--proxy-xsub")  cfg.proxy_xsub = val;
         else if (key == "--hwm")         cfg.hwm = std::stoi(val);
         else if (key == "--timeout")     cfg.timeout = std::stoi(val);
+        else if (key == "--skill-exec-timeout") cfg.timeout = std::stoi(val);
         else if (key == "--workers")     cfg.workers = std::stoi(val);
         else if (key == "--matcher")     cfg.matcher = val;
         else if (key == "--prompt-file") cfg.prompt_file = val;
@@ -132,77 +134,78 @@ static void worker_thread(zmq::context_t& ctx,
         std::cout << "[worker] Processing request " << req.request_id
                   << " intent: " << req.intent.substr(0, 80) << "\n";
 
-        // ── Find matching skill ──
-        // Supports two intent modes:
-        //   Mode 1 (explicit):  {"skill": "csv-analyzer", "data": "..."}
-        //   Mode 2 (task-based): plain text or {"task": "analyze this csv data..."}
-        const SkillDefinition* skill = nullptr;
-        std::string exec_input = req.intent; // data to pass to the script
+        // ── Build trace metadata for UI tracing ──
+        json trace_meta;
+        trace_meta["exec_logs"] = json::array();
+        trace_meta["matcher_mode"] = "opencode";
 
-        bool explicit_skill = false;
-        // Attempt to parse intent as JSON
+        auto log_trace = [&](const std::string& msg) {
+            trace_meta["exec_logs"].push_back(msg);
+        };
+
+        log_trace("[worker] Processing request " + req.request_id);
+
+        // ── Extract the user task/data from the intent ──
+        // Supports two formats:
+        //   JSON: {"task": "analyze this...", "data": "...", "skill": "..."}
+        //   Plain text: raw intent string
+        std::string exec_input = req.intent;
+        std::string hint_skill = "";
+
         try {
             json intent_json = json::parse(req.intent);
-
-            // Mode 1: explicit skill name
-            if (intent_json.contains("skill")) {
-                skill = loader.find(intent_json["skill"].get<std::string>());
-                explicit_skill = true;
-            }
-
-            // Extract the "data" / "task" field for the script
             if (intent_json.contains("data")) {
                 exec_input = intent_json["data"].get<std::string>();
             } else if (intent_json.contains("task")) {
                 exec_input = intent_json["task"].get<std::string>();
             }
-
-            // Mode 2: task description — match against skill descriptions
-            if (!explicit_skill && intent_json.contains("task")) {
-                std::string task = intent_json["task"].get<std::string>();
-                std::cout << "[worker] Mode 2: matching task (" << loader.matcher_mode() << ")\n";
-                skill = loader.match_task(task);
+            // Capture skill hint if provided — passed to OpenCode as context
+            if (intent_json.contains("skill")) {
+                hint_skill = intent_json["skill"].get<std::string>();
             }
         } catch (...) {
-            // Intent is plain text — Mode 2: match by description
-            std::cout << "[worker] Mode 2: plain text intent, matching (" << loader.matcher_mode() << ")\n";
-            skill = loader.match_task(req.intent);
+            // Plain text intent — use as-is
         }
 
-        // Fallback: use first skill if single-skill server
-        if (!skill && !loader.skills().empty() && loader.skills().size() == 1) {
-            skill = &loader.skills().begin()->second;
-            std::cout << "[worker] Fallback: single skill server, using " << skill->name << "\n";
+        log_trace("[worker] Dispatching to OpenCode (AGENTS.md-based matching)");
+        if (!hint_skill.empty()) {
+            log_trace("[worker] Skill hint: " + hint_skill);
         }
+
+        // ── Execute via OpenCode — let it read AGENTS.md for skill matching ──
+        // No explicit matching needed; OpenCode handles both routing and execution.
+        trace_meta["skill_name"] = hint_skill.empty() ? "auto" : hint_skill;
+
+        auto exec_result = executor.execute_direct(exec_input, hint_skill);
+
+        // Capture execution metadata for tracing
+        trace_meta["exit_code"] = exec_result.exit_code;
+        trace_meta["elapsed_ms"] = exec_result.elapsed.count();
+        trace_meta["stderr"] = exec_result.stderr_output;
+        trace_meta["execution_method"] = "opencode (AGENTS.md)";
+        if (!exec_result.matched_skill.empty()) {
+            trace_meta["skill_name"] = exec_result.matched_skill;
+        }
+
+        log_trace("[executor] Finished (exit=" +
+                  std::to_string(exec_result.exit_code) + ", " +
+                  std::to_string(exec_result.elapsed.count()) + "ms)");
 
         OutgoingResponse resp;
-        if (!skill) {
+        if (exec_result.success) {
+            resp = MessageHandler::make_success(
+                req.request_id, req.reply_to,
+                exec_result.stdout_output);
+        } else {
             resp = MessageHandler::make_error(
                 req.request_id, req.reply_to,
-                "No matching skill found for topic: " + req.topic);
-        } else {
-            // ── Progressive disclosure: load full SKILL.md on demand ──
-            auto& mutable_skill = loader.skills()[skill->name];
-            if (!mutable_skill.details_loaded) {
-                std::cout << "[worker] Progressive disclosure: loading details for '"
-                          << mutable_skill.name << "'\n";
-                loader.load_skill_details(mutable_skill);
-            }
-
-            auto exec_result = executor.execute(mutable_skill, exec_input);
-
-            if (exec_result.success) {
-                resp = MessageHandler::make_success(
-                    req.request_id, req.reply_to,
-                    exec_result.stdout_output);
-            } else {
-                resp = MessageHandler::make_error(
-                    req.request_id, req.reply_to,
-                    "Skill execution failed (exit=" +
-                    std::to_string(exec_result.exit_code) + "): " +
-                    exec_result.stderr_output);
-            }
+                "Skill execution failed (exit=" +
+                std::to_string(exec_result.exit_code) + "): " +
+                exec_result.stderr_output);
         }
+
+        // Attach trace metadata to response
+        resp.trace_meta = trace_meta;
 
         // Publish response on the reply_to topic
         std::string resp_payload = MessageHandler::serialize_response(resp);
