@@ -330,6 +330,39 @@ The test suite spins up an in-process ZeroMQ proxy and mock skill servers automa
 python3 test_e2e_live.py
 ```
 
+### Concurrent Stress Test Suite (end-to-end latency)
+
+Use the dedicated stress runner to measure throughput and latency percentiles
+($p50$, $p95$, $p99$) under concurrent load.
+
+```bash
+source .venv/bin/activate
+
+# Full pipeline: HTTP chat API -> routing -> ZMQ -> skill server -> response
+python3 stress_test_e2e.py \
+   --mode chat-api \
+   --requests 200 \
+   --concurrency 20 \
+   --topic TOPIC_DATA_PROCESSING \
+   --timeout 120
+
+# Direct Docker network path: docker exec -> ZMQ -> skill server
+python3 stress_test_e2e.py \
+   --mode docker-exec \
+   --requests 100 \
+   --concurrency 10 \
+   --topic TOPIC_CODE_ANALYSIS \
+   --timeout 120
+
+# Optional: export machine-readable summary
+python3 stress_test_e2e.py --mode chat-api --requests 100 --concurrency 10 --json-out /tmp/skillscale_stress.json
+```
+
+Output includes:
+- total duration and throughput (requests/sec)
+- success rate and sample failures
+- latency stats: `min`, `mean`, `p50`, `p90`, `p95`, `p99`, `max`
+
 ## Configuration
 
 ### Environment Variables
