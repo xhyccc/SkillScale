@@ -99,9 +99,9 @@ INSTRUCTIONS:
 3. Choose the skill that best matches the user's request
 4. Read that skill's SKILL.md to understand how it works
 5. Run the skill's scripts/run.py with the user's input piped to stdin:
-   echo '<INPUT>' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
+   echo '<INPUT>' | PYTHONPATH=/app/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
    Replace <INPUT> with the actual user input (properly escaped) and <SKILL_NAME> with the chosen skill name.
-6. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+6. The PYTHONPATH must include /app/skills so that shared modules (like llm_utils.py) can be loaded.
 7. After running, say 'Done' — nothing else
 
 USER REQUEST:
@@ -118,9 +118,9 @@ INSTRUCTIONS:
 2. Verify that '${HINT_SKILL}' is the best match, or choose a better one
 3. Read the chosen skill's SKILL.md to understand how it works
 4. Run the skill's scripts/run.py with the user's input piped to stdin:
-   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
+   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=/app/skills python3 .claude/skills/<SKILL_NAME>/scripts/run.py > ${RESULT_FILE} 2>&1
    Replace <SKILL_NAME> with the chosen skill name.
-5. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+5. The PYTHONPATH must include /app/skills so that shared modules (like llm_utils.py) can be loaded.
 6. After running, say 'Done' — nothing else
 
 USER REQUEST:
@@ -140,8 +140,8 @@ INSTRUCTIONS:
 1. Read the skill's SKILL.md at .claude/skills/${SKILL_NAME}/SKILL.md to understand what it does
 2. The skill has a scripts/run.py that accepts input on stdin
 3. Run this EXACT command (do NOT modify it):
-   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=\$(pwd)/skills python3 .claude/skills/${SKILL_NAME}/scripts/run.py > ${RESULT_FILE} 2>&1
-4. The PYTHONPATH must include the skills/ directory for shared modules (llm_utils.py)
+   echo '$(echo "$INTENT" | sed "s/'/'\\\\''/g")' | PYTHONPATH=/app/skills python3 .claude/skills/${SKILL_NAME}/scripts/run.py > ${RESULT_FILE} 2>&1
+4. The PYTHONPATH must include /app/skills so that shared modules (like llm_utils.py) can be loaded.
 5. After running, say 'Done' — nothing else
 
 USER INPUT:
@@ -149,7 +149,12 @@ ${INTENT}"
 fi
 
 # ── Execute via OpenCode in non-interactive mode ──
-cd "$PROJECT_ROOT"
+# If inside a skill-specific container, move to the mapped skills dir
+if [[ -n "${SKILLSCALE_SKILLS_DIR:-}" ]] && [[ -f "${SKILLSCALE_SKILLS_DIR}/AGENTS.md" ]]; then
+    cd "${SKILLSCALE_SKILLS_DIR}"
+else
+    cd "$PROJECT_ROOT"
+fi
 
 # Source .env for API keys if available
 if [[ -f "$PROJECT_ROOT/.env" ]]; then

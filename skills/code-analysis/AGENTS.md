@@ -15,7 +15,7 @@ using the OpenSkills SKILL.md format.
     review. Computes cyclomatic complexity, nesting depth, and function length,
     then provides intelligent refactoring suggestions via LLM.
   </description>
-  <location>code-complexity/</location>
+  <location>.claude/skills/code-complexity/</location>
 </skill>
 
 <skill>
@@ -25,7 +25,7 @@ using the OpenSkills SKILL.md format.
     review. Finds unused imports, unused variables, unreachable code, and
     empty functions, then provides intelligent cleanup suggestions via LLM.
   </description>
-  <location>dead-code-detector/</location>
+  <location>.claude/skills/dead-code-detector/</location>
 </skill>
 
 </available_skills>
@@ -34,7 +34,7 @@ using the OpenSkills SKILL.md format.
 
 Skills are invoked by the skill server when it receives a task-based intent
 on the `TOPIC_CODE_ANALYSIS` ZeroMQ topic. The server uses LLM-powered
-matching to select the best skill for each incoming task, loads the SKILL.md
-for full instructions, and executes `scripts/run.py`.
+matching to select the best skill for each incoming task, loads the `<location>/SKILL.md`
+for full instructions, and executes OpenCode using `<location>/scripts/run.py`.
 
 <skills_system priority="1">

@@ -101,7 +101,6 @@ result = await client.invoke_task("TOPIC_DATA_PROCESSING", "summarize this artic
 result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b\n1,2")
 ```
 
-## Web UI
 
 SkillScale includes a unified management and testing interface:
 
@@ -115,7 +114,6 @@ SkillScale includes a unified management and testing interface:
 | **Chat Testing** | Send test messages to any topic, see results with inline request traces |
 | **Traces** | Full request lifecycle view with waterfall timing charts across all phases |
 
-The UI runs on `http://localhost:3001` (frontend) with the API on `http://localhost:8401`.
 
 ## Project Structure
 
@@ -160,7 +158,6 @@ SkillScale/
 │       ├── AGENTS.md           # OpenSkills discovery manifest
 │       ├── code-complexity/    # SKILL.md + scripts/run.py
 │       └── dead-code-detector/ # SKILL.md + scripts/run.py
-├── ui/                         # Unified web interface
 │   └── management/
 │       ├── server.py           # FastAPI backend (API + chat + tracing)
 │       └── frontend/           # React + Vite frontend (3 tabs)
@@ -185,7 +182,6 @@ SkillScale/
 | **agent/** | Python 3.10+ | Standalone CLI agent built on the SDK; LLM-powered topic routing |
 | **examples/** | Python | Working examples: direct client, LangChain agent, LangGraph graph |
 | **skills/** | Markdown + Python | `AGENTS.md` discovery manifests, `SKILL.md` metadata, `scripts/run.py` LLM-powered executables, shared `llm_utils.py` |
-| **ui/** | Python + React | Unified management UI — Dashboard (service control), Chat Testing (interactive), Traces (request lifecycle waterfall) |
 | **tests/** | Python (pytest) | 34 tests covering proxy routing, agent E2E, skill execution, and fault tolerance |
 | **k8s/** | YAML | Namespace, Deployments, Services, SkillTopic CRD, KEDA ScaledObjects |
 
@@ -242,7 +238,6 @@ This does everything:
 - Builds both C++ binaries (proxy + skill server)
 - Installs the `skillscale` SDK in development mode
 
-### One-Command Launch (with UI)
 
 ```bash
 chmod +x launch_ui.sh && ./launch_ui.sh
@@ -253,7 +248,6 @@ This starts **everything** and opens the browser:
 - 2 C++ skill servers (data-processing + code-analysis)
 - FastAPI backend (port 8401)
 - React frontend (port 3001)
-- Opens `http://localhost:3001` in your browser
 
 Press `Ctrl+C` to stop all services.
 

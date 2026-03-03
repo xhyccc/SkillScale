@@ -11,10 +11,13 @@
 #   6. Launches the full Docker stack
 #
 # Usage:
-#   bash build.sh              # full clean + build + launch
+#   bash build.sh              # full clean + build + launch (Docker only)
 #   bash build.sh --no-clean   # build + launch (skip cleaning)
 #   bash build.sh --build-only # clean + build images only
 #   bash build.sh --down       # stop all containers
+#
+# NOTE: For a complete system launch (including the Python Gateway), 
+# use ./run_all.sh instead.
 # ════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -430,6 +433,7 @@ for i in "${!SKILL_NAMES[@]}"; do
 done
 echo ""
 echo -e "  ${CYAN}Commands:${NC}"
+echo "    ./run_all.sh                    # launch complete system + gateway"
 echo "    docker compose logs -f          # follow all logs"
 echo "    docker compose logs <service>   # single service logs"
 echo "    docker compose down             # stop everything"
