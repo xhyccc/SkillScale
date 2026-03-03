@@ -1,31 +1,33 @@
 # SkillScale — Distributed Skill-as-a-Service Agent Infrastructure
 
 A middleware SDK and distributed infrastructure for executing AI agent skills at scale.
-C++ Skill Servers discover and execute skills using the
-[OpenSkills](https://github.com/numman-ali/openskills) standard over a
-ZeroMQ pub/sub bus. Skill matching is **LLM-powered by default** (with keyword fallback),
-and skills themselves call LLMs for intelligent analysis. Any agent framework —
-**LangChain, LangGraph, CrewAI**, or your own — plugs into the middleware through
-thin adapters.
+It enables transparent routing between high-level reasoning protocols—**Model Context Protocol (MCP)** and **Google Agent-to-Agent (A2A)**—and a high-performance ZeroMQ C++ backend.
+The backend seamlessly discovers and executes capabilities configured as **Claude Skills** using the
+[OpenSkills](https://github.com/numman-ali/openskills) standard.
+
+Skill matching is **LLM-powered by default**, and skills themselves function as capable micro-agents. Any established agent framework (**LangChain, LangGraph, CrewAI**) seamlessly interfaces with the network.
 
 ## Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  Your Agent (pick any framework)                          │
-│  LangChain │ LangGraph │ CrewAI │ AutoGen │ Custom        │
-└────────────────────────┬──────────────────────────────────┘
-                         │  pip install skillscale
-┌────────────────────────▼──────────────────────────────────┐
-│  skillscale SDK  (middleware)                              │
-│  ┌───────────────┐  ┌────────────┐  ┌──────────────────┐  │
-│  │ Core Client    │  │ Adapters   │  │ Skill Discovery  │  │
-│  │ (async ZMQ)    │  │ LC/LG/Crew │  │ (AGENTS.md scan) │  │
-│  └───────────────┘  └────────────┘  └──────────────────┘  │
-└────────────────────────┬──────────────────────────────────┘
-                         │  ZeroMQ PUB/SUB
-┌────────────────────────▼──────────────────────────────────┐
-│  C++ XPUB/XSUB Proxy (:5444 XSUB │ :5555 XPUB │ :9100)  │
+│  External Clients & Agent Frameworks                      │
+│                                                           │
+│  ┌─────────────────┐ ┌──────────────┐ ┌───────────────┐ │
+│  │ Claude Desktop  │ │ Google Agent │ │ Local Agents  │ │
+│  │ (via MCP)       │ │ (via A2A)    │ │ (Python SDK)  │ │
+│  └───────┬─────────┘ └──────┬───────┘ └───────┬───────┘ │
+└──────────┼──────────────────┼─────────────────┼─────────┘
+           │                  │                 │
+┌──────────▼──────────────────▼────────┐        │
+│    Transparent Python Gateway        │        │ JSON Intent
+│    (Translates MCP & A2A to ZMQ)     │        │
+└──────────────────┬───────────────────┘        │
+                   └───────────┬────────────────┘
+                               │
+                       ZeroMQ PUB/SUB
+┌──────────────────────────────▼────────────────────────────┐
+│  C++ XPUB/XSUB Proxy (:5444 XSUB │ :5555 XPUB │ :9100)    │
 └────────────┬──────────────────────────────────┬───────────┘
              │                                  │
  ┌───────────▼──────────────┐    ┌──────────────▼───────────┐
@@ -39,17 +41,11 @@ thin adapters.
 
 ### How It Works
 
-1. **Agent routing** — Your agent framework publishes a JSON intent to a ZMQ topic
-   (e.g. `TOPIC_DATA_PROCESSING`). An LLM classifies the intent and selects the topic.
-2. **Proxy forwarding** — The stateless XPUB/XSUB proxy forwards it to the matching
-   C++ skill server.
-3. **Skill matching** — The C++ skill server dispatches the task to
-   [OpenCode](https://github.com/opencode-ai/opencode), which reads `AGENTS.md`
-   to discover available skills and automatically matches + executes the best one.
-4. **Skill execution** — The matched skill's `scripts/run.py` is executed via POSIX
-   `fork`/`exec`. Skills themselves call LLMs for intelligent analysis.
-5. **Response** — Results are published back on the agent's ephemeral reply topic
-   (`AGENT_REPLY_<id>`).
+1. **Protocol Bridging** — High-level agents (like Claude Desktop via MCP or Google Engine via A2A) send requests to the Transparent Gateway. The gateway standardizes these into ZMQ payloads. Custom agent frameworks (LangChain, CrewAI) can also publish directly via the SDK.
+2. **Proxy forwarding** — The stateless XPUB/XSUB proxy forwards payloads to the matching C++ skill server.
+3. **Skill matching** — The C++ skill server parses `AGENTS.md` and dynamically matches intents using LLMs or keywords.
+4. **Claude Skills execution** — The matched skill's execution layer is invoked using standard Claude OpenSkills (via `scripts/run.py`). The sub-agents themselves call LLMs for intelligent analysis.
+5. **Response** — Results are published back over the ZMQ bus, through the gateway, and back formatted to the original client protocol (MCP or A2A).
 
 ### OpenSkills Integration
 
@@ -102,18 +98,16 @@ result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b
 ```
 
 
-SkillScale includes a unified management and testing interface:
+SkillScale includes a **Transparent Gateway** bridging external Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) networks down into the blazing-fast internal ZeroMQ bus.
 
 ```bash
-./launch_ui.sh       # Starts everything + opens browser
+./run_all.sh       # Starts Docker services + Python Gateway
 ```
 
-| Tab | Description |
+| Bridge | Description |
 |-----|-------------|
-| **Dashboard** | Launch/stop/restart proxy and skill servers, view logs and configuration |
-| **Chat Testing** | Send test messages to any topic, see results with inline request traces |
-| **Traces** | Full request lifecycle view with waterfall timing charts across all phases |
-
+| **Google A2A** | REST server mapped via Pydantic conforming to `a2a-protocol` standard |
+| **Model Context Protocol** | StdIO server allowing Claude Desktop and similar clients to call internal skills |
 
 ## Project Structure
 
@@ -164,11 +158,9 @@ SkillScale/
 ├── tests/                      # 34 integration & fault-tolerance tests
 ├── docker/                     # Multi-stage Dockerfiles
 ├── k8s/                        # Kubernetes manifests + CRDs + KEDA
-├── package.json                # npm openskills dependency
 ├── requirements.txt            # All Python dependencies (unified)
-├── setup.sh                    # One-command install
-├── launch_ui.sh                # Launch everything + open browser
-└── launch_all.sh               # Launch services + run E2E test
+├── run_all.sh                  # Bootstrap and Launch SkillScale System
+└── build.sh                    # Docker build & launch
 ```
 
 ## Components
@@ -176,6 +168,7 @@ SkillScale/
 | Component | Language | Description |
 |-----------|----------|-------------|
 | **skillscale/** | Python 3.10+ | **Middleware SDK** — core ZMQ client, skill discovery, and framework adapters (LangChain, LangGraph, CrewAI) |
+| **gateway/** | Python 3.10+ | Transparent Gateway bridging Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) to internal ZMQ. |
 | **proxy/** | C++17 | XPUB/XSUB stateless message switch with Prometheus metrics on `:9100` |
 | **skill-server/** | C++17 | Multi-threaded subscriber; parses `AGENTS.md` for OpenSkills discovery; matches tasks via LLM (default) or keyword scoring; executes skills via POSIX `fork`/`exec` with configurable timeouts |
 | **scripts/** | Python + Shell | `npx openskills` wrapper, LLM skill matcher (`llm_match.py`), configurable prompt templates |
@@ -240,16 +233,15 @@ This does everything:
 
 
 ```bash
-chmod +x launch_ui.sh && ./launch_ui.sh
+./run_all.sh
 ```
 
-This starts **everything** and opens the browser:
-- C++ XPUB/XSUB proxy
-- 2 C++ skill servers (data-processing + code-analysis)
-- FastAPI backend (port 8401)
-- React frontend (port 3001)
+This starts **everything**:
+- ZMQ infrastructure and C++ agents via Docker
+- Transparent Gateway (MCP & A2A Bridge) on localhost:8081
 
 Press `Ctrl+C` to stop all services.
+
 
 ### Install the SDK
 
