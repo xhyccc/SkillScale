@@ -28,6 +28,9 @@
 #include <thread>
 #include <vector>
 
+#include "server_config.h"
+#include "kafka_service.h"
+
 using json = nlohmann::json;
 
 static std::atomic<bool> g_running{true};
@@ -37,46 +40,38 @@ static void signal_handler(int) { g_running.store(false); }
 // ──────────────────────────────────────────────────────────
 //  CLI argument parsing (simple key-value)
 // ──────────────────────────────────────────────────────────
-struct Config {
-    std::string topic       = "TOPIC_DEFAULT";
-    std::string description = "";            // human-readable server description
-    std::string skills_dir  = "./skills";
-    std::string proxy_xpub  = "tcp://127.0.0.1:5555";
-    std::string proxy_xsub  = "tcp://127.0.0.1:5444";
-    std::string matcher     = "llm";         // "llm" or "keyword"
-    std::string prompt_file = "";            // optional custom prompt template
-    std::string python      = "python3";     // Python executable for LLM subprocess
-    int         hwm         = 10000;
-    int         heartbeat   = 5000;   // ms
-    int         timeout     = 180000;  // skill execution timeout ms (via SKILLSCALE_TIMEOUT)
-    int         workers     = 2;      // concurrent skill execution threads
-};
-
 static Config parse_args(int argc, char* argv[]) {
     Config cfg;
 
     // Override from environment first
+    if (auto v = std::getenv("SKILLSCALE_BACKEND"))    cfg.backend = v;
     if (auto v = std::getenv("SKILLSCALE_TOPIC"))      cfg.topic = v;
     if (auto v = std::getenv("SKILLSCALE_DESCRIPTION"))cfg.description = v;
     if (auto v = std::getenv("SKILLSCALE_SKILLS_DIR")) cfg.skills_dir = v;
     if (auto v = std::getenv("SKILLSCALE_PROXY_XPUB")) cfg.proxy_xpub = v;
     if (auto v = std::getenv("SKILLSCALE_PROXY_XSUB")) cfg.proxy_xsub = v;
+    if (auto v = std::getenv("SKILLSCALE_BROKER_URL")) cfg.brokers = v;
+    if (auto v = std::getenv("SKILLSCALE_GROUP_ID"))   cfg.group_id = v;
     if (auto v = std::getenv("SKILLSCALE_HWM"))        cfg.hwm = std::atoi(v);
     if (auto v = std::getenv("SKILLSCALE_TIMEOUT"))    cfg.timeout = std::atoi(v);
     if (auto v = std::getenv("SKILLSCALE_WORKERS"))    cfg.workers = std::atoi(v);
     if (auto v = std::getenv("SKILLSCALE_MATCHER"))    cfg.matcher = v;
     if (auto v = std::getenv("SKILLSCALE_PROMPT_FILE"))cfg.prompt_file = v;
     if (auto v = std::getenv("SKILLSCALE_PYTHON"))     cfg.python = v;
+    if (auto v = std::getenv("SKILLSCALE_KAFKA_BROKERS")) cfg.brokers = v;
 
     // CLI overrides
     for (int i = 1; i < argc - 1; i += 2) {
         std::string key = argv[i];
         std::string val = argv[i + 1];
-        if (key == "--topic")      cfg.topic = val;
-        else if (key == "--description")  cfg.description = val;
+        if (key == "--backend")          cfg.backend = val;
+        else if (key == "--topic")       cfg.topic = val;
+        else if (key == "--description") cfg.description = val;
         else if (key == "--skills-dir")  cfg.skills_dir = val;
         else if (key == "--proxy-xpub")  cfg.proxy_xpub = val;
         else if (key == "--proxy-xsub")  cfg.proxy_xsub = val;
+        else if (key == "--brokers")     cfg.brokers = val;
+        else if (key == "--group-id")    cfg.group_id = val;
         else if (key == "--hwm")         cfg.hwm = std::stoi(val);
         else if (key == "--timeout")     cfg.timeout = std::stoi(val);
         else if (key == "--skill-exec-timeout") cfg.timeout = std::stoi(val);
@@ -270,6 +265,13 @@ int main(int argc, char* argv[]) {
         metadata["skills"].push_back(s);
     }
     std::cout << "[server] Skill metadata: " << metadata.dump(2) << "\n";
+
+    // ── Dispatch based on backend ──
+    if (cfg.backend == "redpanda" || cfg.backend == "kafka") {
+        std::cout << "[server] Starting Kafka/Redpanda backend...\n";
+        run_kafka_service(cfg, loader, g_running);
+        return 0;
+    }
 
     // ── ZeroMQ setup ──
     zmq::context_t ctx(2);

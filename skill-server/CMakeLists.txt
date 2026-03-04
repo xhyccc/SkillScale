@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Find ZeroMQ
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZMQ REQUIRED libzmq)
+pkg_check_modules(RDKAFKA REQUIRED rdkafka++)
 
 # cppzmq — header-only
 find_path(CPPZMQ_INCLUDE_DIR zmq.hpp
@@ -24,14 +25,16 @@ add_executable(skillscale_skill_server
     skill_executor.cpp
     skill_loader.cpp
     message_handler.cpp
+    kafka_service.cpp
 )
 
 target_include_directories(skillscale_skill_server PRIVATE
     ${ZMQ_INCLUDE_DIRS}
     ${CPPZMQ_INCLUDE_DIR}
+    ${RDKAFKA_INCLUDE_DIRS}
     ${NLOHMANN_JSON_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_directories(skillscale_skill_server PRIVATE ${ZMQ_LIBRARY_DIRS})
-target_link_libraries(skillscale_skill_server PRIVATE ${ZMQ_LIBRARIES})
+target_link_directories(skillscale_skill_server PRIVATE ${ZMQ_LIBRARY_DIRS} ${RDKAFKA_LIBRARY_DIRS})
+target_link_libraries(skillscale_skill_server PRIVATE ${ZMQ_LIBRARIES} ${RDKAFKA_LIBRARIES})

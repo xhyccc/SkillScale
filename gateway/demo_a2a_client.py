@@ -85,8 +85,10 @@ def main():
                 print(json.dumps(resp_data, indent=2))
             else:
                 print(f"Error {response.status}: {response.read().decode('utf-8')}")
+                sys.exit(1)
     except Exception as e:
         print(f"Connection failed (is transparent_layer.py running?): {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+import os
 from typing import Any, Dict, Optional
 
 # import MCP (Model Context Protocol) SDKs (e.g. mcp, fastmcp)
@@ -51,6 +52,7 @@ class TransparentGateway:
             self.client = SkillScaleClient(self.config)
             log.info("Using ZeroMQ backend")
         
+        self.gateway_timeout = float(os.getenv("SKILLSCALE_GATEWAY_TIMEOUT", "180.0"))
         self.mcp = FastMCP("SkillScaleMCPGateway") if FastMCP else None
         
         self.setup_mcp_tools()
@@ -63,10 +65,22 @@ class TransparentGateway:
         
         # Start protocol servers asynchronously
         tasks = []
-        if self.mcp:
-            tasks.append(asyncio.create_task(self._start_mcp_server()))
-        tasks.append(asyncio.create_task(self._start_a2a_server()))
         
+        # Check environment variables to decide which protocols to enable
+        # Default: Enable both (if installed)
+        enable_mcp = os.environ.get("SKILLSCALE_PROTOCOL_MCP", "1") == "1"
+        enable_a2a = os.environ.get("SKILLSCALE_PROTOCOL_A2A", "1") == "1"
+
+        if self.mcp and enable_mcp:
+            tasks.append(asyncio.create_task(self._start_mcp_server()))
+        
+        if enable_a2a:
+            tasks.append(asyncio.create_task(self._start_a2a_server()))
+        
+        if not tasks:
+            log.warning("No protocols enabled (SKILLSCALE_PROTOCOL_MCP=0, SKILLSCALE_PROTOCOL_A2A=0). Exiting.")
+            return
+
         await asyncio.gather(*tasks)
 
     # =========================================================================
@@ -102,7 +116,8 @@ class TransparentGateway:
             log.info(f"[MCP] Routing tool '{skill_name}' to ZMQ '{topic}' with context.")
             
             # Send through the transparent ZMQ bus. SkillScale invoke expects a JSON string intent.
-            reply = await self.client.invoke(topic, json.dumps(zmq_payload), timeout=60.0)
+            # Timeout is now configurable via SKILLSCALE_GATEWAY_TIMEOUT (default 180s)
+            reply = await self.client.invoke(topic, json.dumps(zmq_payload), timeout=self.gateway_timeout)
             return json.dumps(reply)
 
         @self.mcp.resource("skillscale://context/{session_id}")
@@ -169,7 +184,8 @@ class TransparentGateway:
             }
             
             # Send to ZMQ
-            reply = await self.client.invoke(target_topic, json.dumps(zmq_payload), timeout=120.0)
+            # Timeout is now configurable via SKILLSCALE_GATEWAY_TIMEOUT (default 180s)
+            reply = await self.client.invoke(target_topic, json.dumps(zmq_payload), timeout=self.gateway_timeout)
             
             # Pack ZMQ reply back into Google A2A expected SendTaskResponse protocol structure
             a2a_resp = SendTaskResponse(

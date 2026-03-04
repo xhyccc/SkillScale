@@ -361,14 +361,19 @@ log "Generated docker-compose.yml with ${#SKILL_DIRS[@]} skill server(s) + proxy
 step "Checking Docker"
 
 if ! docker info &>/dev/null; then
-    warn "Docker daemon not running. Attempting to start Docker Desktop..."
-    open -a Docker 2>/dev/null || true
+    warn "Docker daemon not running."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        log "Attempting to start Docker Desktop (macOS)..."
+        open -a Docker 2>/dev/null || true
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        log "Please start Docker manually (e.g., sudo systemctl start docker)"
+    fi
     for i in {1..30}; do
         docker info &>/dev/null && break
         sleep 2
     done
     if ! docker info &>/dev/null; then
-        err "Docker daemon failed to start. Please start Docker Desktop manually."
+        err "Docker daemon failed to start. Please start Docker manually."
         exit 1
     fi
 fi

@@ -23,18 +23,80 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 pip install -r requirements.txt
+export PYTHONPATH=$PYTHONPATH:.
 
 # 2. Build and Start Docker Services
 echo ""
 echo "[2] Starting Docker core services via build.sh..."
-bash build.sh
+# Pass arguments like --no-clean to build.sh if provided
+bash build.sh "$@"
 
-# Let ZMQ bus stabilize
-sleep 3
+# Wait for ZMQ Proxy (Port 5555)
+echo "Waiting for ZMQ Proxy (localhost:5555)..."
+for ((i=1; i<=30; i++)); do
+    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 5555))" 2>/dev/null; then
+        echo "ZMQ Proxy is ready!"
+        break
+    fi
+    sleep 1
+done
 
 echo ""
-echo "[3] Starting Transparent Gateway (MCP & A2A Bridge)..."
-echo "    - MCP Stdio Server & A2A Server bound to port 8081."
-echo "    -> Press Ctrl+C to terminate gateway."
+echo "[3] Starting Transparent Gateway & Validation..."
+
+# 3.1 Verify MCP (Independent process spawn)
+echo "- Validating MCP Protocol (Stdio)..."
+if python3 gateway/demo_mcp_client.py; then
+    echo "  ✓ MCP Client Test Passed"
+else
+    echo "  ✗ MCP Client Test Failed"
+    exit 1
+fi
+
+# 3.2 Start Gateway (Background) & Verify A2A
+echo "- Starting Gateway for A2A Protocol..."
+export PYTHONPATH=$PYTHONPATH:.
+# Start Gateway in background, logging to file
+SKILLSCALE_PROTOCOL_MCP=0 python3 gateway/transparent_layer.py > gateway.log 2>&1 &
+GATEWAY_PID=$!
+echo "  PID: $GATEWAY_PID"
+
+# Trap to ensure we kill the gateway if the script exits abnormally (during startup/tests)
+# Once we reach the end successfully, we want the process to stay alive, so we'll clear the trap.
+trap "kill $GATEWAY_PID 2>/dev/null" EXIT
+
+# Wait for A2A Port 8085
+echo "  Waiting for A2A Server (port 8085)..."
+for ((i=1; i<=15; i++)); do
+    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 8085))" 2>/dev/null; then
+        echo "  Port 8085 is ready."
+        break
+    fi
+    sleep 1
+done
+
+echo "- Validating A2A Connectivity..."
+if python3 gateway/demo_a2a_client.py; then
+    echo "  ✓ A2A Client Test Passed"
+else
+    echo "  ✗ A2A Client Test Failed (see output above / gateway.log)"
+    tail -n 20 gateway.log
+    exit 1
+fi
+
+# Clear the trap so the gateway stays running after script exit
+trap - EXIT
+
 echo ""
-python3 gateway/transparent_layer.py
+echo "=========================================="
+echo "    All Systems GO!                       "
+echo "=========================================="
+echo "Gateway A2A Server running on port 8085."
+echo "PID: $GATEWAY_PID"
+echo "Log: gateway.log"
+echo ""
+echo "Run 'tail -f gateway.log' to follow logs."
+echo "Run 'kill $GATEWAY_PID' to stop the gateway."
+echo ""
+
+

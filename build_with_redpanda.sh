@@ -94,37 +94,41 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════
-# 3. Generate docker-compose-redpanda.yml
+# 2.5 Build C++ Skill Server (Local)
 # ════════════════════════════════════════════════════════════
-step "Scanning skills/ and generating docker-compose-redpanda.yml"
+step "Building Local C++ Skill Server..."
 
-# Discover skill server directories
-SKILL_DIRS=()
-SKILL_NAMES=()
-SKILL_TOPICS=()
-
-# Using nullglob to handle empty dirs gracefully
-shopt -s nullglob
-for dir in skills/*/; do
-    dirname=$(basename "$dir")
-    [[ "$dirname" == "__pycache__" ]] && continue
-    [[ ! -f "$dir/AGENTS.md" ]] && continue
-
-    SKILL_DIRS+=("$dir")
-    SKILL_NAMES+=("$dirname")
-    
-    # Topic Naming Convention: data-processing -> TOPIC_DATA_PROCESSING
-    topic="TOPIC_$(echo "$dirname" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
-    SKILL_TOPICS+=("$topic")
-
-    log "Found skill: ${CYAN}$dirname${NC} → topic=$topic"
-done
-shopt -u nullglob
-
-if [[ ${#SKILL_DIRS[@]} -eq 0 ]]; then
-    err "No skill server directories found under skills/!"
+if ! command -v cmake &> /dev/null; then
+    err "cmake could not be found. Please install cmake."
     exit 1
 fi
+
+# Build directory for skill-server
+mkdir -p build/skill-server
+pushd build/skill-server > /dev/null
+
+log "Configuring CMake (skill-server)..."
+cmake ../../skill-server -DCMAKE_BUILD_TYPE=Release
+
+log "Compiling..."
+# macOS: sysctl -n hw.ncpu; Linux: nproc
+CORES=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
+make -j"$CORES"
+
+popd > /dev/null
+log "C++ Build Complete (skill-server)."
+
+# ════════════════════════════════════════════════════════════
+# 3. Generate docker-compose-redpanda.yml
+# ════════════════════════════════════════════════════════════
+# step "Scanning skills/ and generating docker-compose-redpanda.yml"
+
+# With C++ build, we only need the REDPANDA service. 
+# The SKILL SERVERS run as C++ binaries locally.
+# The AGENT and GATEWAY run as Python processes locally.
+# So the docker-compose needed is just: Redpanda.
+
+log "Generating simple docker-compose-redpanda.yml (Broker Only)"
 
 COMPOSE_FILE="docker-compose-redpanda.yml"
 
@@ -146,13 +150,14 @@ services:
       - --overprovisioned
       - --node-id 0
       - --check=false
-      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:19092
       - --pandaproxy-addr 0.0.0.0:8082
       - --advertise-pandaproxy-addr localhost:8082
     ports:
       - "8081:8081"
       - "8082:8082"
+      - "19092:19092"
       - "9092:9092"
       - "9644:9644"
     volumes:
@@ -184,74 +189,15 @@ services:
     depends_on:
       - redpanda
 
-HEADER
-
-# Common Environment Variables for Python Workers
-# Note: Using Dockerfile.agent which copies requirements.txt from root
-ENV_BLOCK='      SKILLSCALE_BROKER_URL: redpanda:29092
-      SKILLSCALE_SKILLS_DIR: /skills
-      SKILLSCALE_TIMEOUT: "'"${SKILLSCALE_TIMEOUT}"'"
-      LLM_PROVIDER: "'"${LLM_PROVIDER}"'"
-      OPENAI_API_KEY: "'"${OPENAI_API_KEY}"'"
-      OPENAI_API_BASE: "'"${OPENAI_API_BASE}"'"
-      OPENAI_MODEL: "'"${OPENAI_MODEL}"'"'
-
-# Append service block for each skill
-for i in "${!SKILL_DIRS[@]}"; do
-    name="${SKILL_NAMES[$i]}"
-    topic="${SKILL_TOPICS[$i]}"
-    
-    # We use Dockerfile.agent because it's a generic Python environment
-    # capable of running any python script in the repo.
-    cat >> "$COMPOSE_FILE" <<SKILL_SVC
-
-  # Skill Server: $name
-  skill-server-$name:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.redpanda
-    command: ["python3", "skillscale/server_kafka.py", "--topic", "$topic", "--skills-dir", "/skills"]
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    volumes:
-      - ./skills/$name:/skills/$name
-      - ./skillscale:/app/skillscale
-    environment:
-$ENV_BLOCK
-      SKILLSCALE_TOPIC: "$topic"
-SKILL_SVC
-done
-
-# Prepare Agent Block
-cat >> "$COMPOSE_FILE" <<AGENT_SVC
-
-  # ── Agent (Data Generator / CLI) ──
-  agent:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.redpanda
-    command: ["python3", "agent/main_kafka.py"]
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    environment:
-$ENV_BLOCK
-    stdin_open: true
-    tty: true
-AGENT_SVC
-
-# Volumes at end
-cat >> "$COMPOSE_FILE" <<VOLUMES
-
 volumes:
   redpanda-data:
-VOLUMES
 
-log "Generated docker-compose-redpanda.yml with ${#SKILL_DIRS[@]} skill servers."
+HEADER
+log "Generated docker-compose-redpanda.yml."
 
 # ════════════════════════════════════════════════════════════
 # 4. Build Containers
+
 # ════════════════════════════════════════════════════════════
 step "Building Docker images"
 

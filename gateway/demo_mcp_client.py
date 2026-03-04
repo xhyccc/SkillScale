@@ -9,10 +9,14 @@ async def main():
     print("Starting MCP Client Demo...")
     
     # Run the gateway as an MCP Stdio Server
+    server_env = os.environ.copy()
+    server_env["SKILLSCALE_PROTOCOL_A2A"] = "0"
+    server_env["SKILLSCALE_PROTOCOL_MCP"] = "1"
+    
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["gateway/transparent_layer.py"],
-        env=os.environ.copy()
+        env=server_env
     )
     
     try:
@@ -54,6 +58,7 @@ async def main():
                     
     except Exception as e:
         print(f"Failed to connect or run demo: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())

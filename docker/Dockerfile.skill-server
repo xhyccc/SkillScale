@@ -1,11 +1,12 @@
 # ── Stage 1: Build C++ skill server ──
-FROM docker.1ms.run/library/ubuntu:22.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config \
     libzmq3-dev \
+    librdkafka-dev \
     nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,10 +17,11 @@ COPY docker/cppzmq/zmq_addon.hpp /usr/include/zmq_addon.hpp
 WORKDIR /build
 COPY skill-server/ .
 
-RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
+WORKDIR /build/build
+RUN cmake .. && make -j4
 
 # ── Stage 2: Download OpenCode for Linux ──
-FROM docker.1ms.run/library/ubuntu:22.04 AS opencode-dl
+FROM ubuntu:22.04 AS opencode-dl
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -36,12 +38,13 @@ RUN ARCH_MAP=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") 
     chmod +x /tmp/opencode/opencode
 
 # ── Stage 3: Runtime ──
-FROM docker.1ms.run/library/ubuntu:22.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies:
 #   libzmq5      — ZeroMQ for skill server
+#   librdkafka++1 — Kafka/Redpanda client (C++ runtime)
 #   python3/pip  — Skill scripts (run.py) and shared modules
 #   nodejs/npm   — OpenCode runtime + openskills CLI
 #   ripgrep      — Required by OpenCode for code search
@@ -49,6 +52,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   bash/coreutils — Shell execution for opencode-exec
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
+    librdkafka++1 \
     python3 python3-pip \
     nodejs npm \
     ripgrep \
@@ -73,9 +77,6 @@ WORKDIR /app
 
 # Copy OpenCode project config
 COPY opencode.json /app/opencode.json
-
-# Copy AGENTS.md (read by OpenCode for skill discovery)
-COPY AGENTS.md /app/AGENTS.md
 
 # Copy the opencode-exec bridge script
 COPY scripts/opencode-exec /app/scripts/opencode-exec

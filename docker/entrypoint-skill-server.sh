@@ -37,6 +37,12 @@ if [[ -f /app/.env ]]; then
     echo "[entrypoint] Loaded /app/.env"
 fi
 
+# ── 3.5 Ensure AGENTS.md is available in CWD ──
+if [[ -f /skills/AGENTS.md && ! -f /app/AGENTS.md ]]; then
+    echo "[entrypoint] Symlinking /skills/AGENTS.md -> /app/AGENTS.md"
+    ln -s /skills/AGENTS.md /app/AGENTS.md
+fi
+
 # ── 4. Build skill server CLI arguments ──
 ARGS=()
 

@@ -1,5 +1,5 @@
 # ── Stage 1: Build ──
-FROM docker.1ms.run/library/ubuntu:22.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -18,7 +18,7 @@ COPY proxy/ .
 RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
 
 # ── Stage 2: Runtime ──
-FROM docker.1ms.run/library/ubuntu:22.04
+FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
