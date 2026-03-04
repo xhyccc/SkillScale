@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/build/cmake_install.cmake",
+		"/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/build/src/cmake_install.cmake",
+		"/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/build/src-cpp/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

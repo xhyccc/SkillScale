@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 #
-# run_all.sh — Bootstrap and Launch SkillScale System
+# run_all.sh — Bootstrap and Launch SkillScale System (Rust + Redpanda)
 #
 # This script:
-#   1. Sets up the Python environment and installs dependencies.
+#   1. Sets up the Python environment (installation of A2A protocol, etc.)
 #   2. Invokes build.sh to construct and launch the Docker services
-#      (ZMQ proxy, Skill servers, internal agents).
-#   3. Starts the Transparent Gateway (A2A / MCP) locally.
+#      (Rust Gateway, Skill Servers, Redpanda).
+#   3. Waits for services to be ready.
+#   4. Validate endpoints (A2A).
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "=========================================="
 echo "    Launching SkillScale Core System      "
+echo "    Architecture: Rust + Redpanda (Kafka) "
 echo "=========================================="
 
 # 1. Setup Python Virtual Environment
@@ -22,7 +24,7 @@ if [ ! -d ".venv" ]; then
     python3 -m venv .venv
 fi
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt >/dev/null
 export PYTHONPATH=$PYTHONPATH:.
 
 # 2. Build and Start Docker Services
@@ -31,23 +33,45 @@ echo "[2] Starting Docker core services via build.sh..."
 # Pass arguments like --no-clean to build.sh if provided
 bash build.sh "$@"
 
-# Wait for ZMQ Proxy (Port 5555)
-echo "Waiting for ZMQ Proxy (localhost:5555)..."
+# Wait for Rust Gateway (Port 8085)
+echo "Waiting for Rust Gateway (localhost:8085)..."
 for ((i=1; i<=30; i++)); do
-    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 5555))" 2>/dev/null; then
-        echo "ZMQ Proxy is ready!"
+    if curl -s http://localhost:8085 >/dev/null; then
+        echo "Rust Gateway is responding!"
         break
     fi
-    sleep 1
+     # Also try socket check if endpoint returns 404/500
+    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 8085))" 2>/dev/null; then
+        echo "Rust Gateway port is open!"
+        break
+    fi
+    echo -n "."
+    sleep 2
 done
+echo ""
+
+# 3. Validation
+echo "[3] Validating SkillScale Gateway..."
+
+# 3.1 Verify A2A Protocol (HTTP)
+echo "- Validating A2A Client Demo (HTTP)..."
+# We use the python script but ensure it points to localhost:8085
+if python3 gateway/demo_a2a_client.py; then
+    echo "  ✓ A2A Client Demo Passed"
+else
+    echo "  ✗ A2A Client Demo Failed (Check docker logs for gateway)"
+    exit 1
+fi
 
 echo ""
-echo "[3] Starting Transparent Gateway & Validation..."
+echo "=========================================="
+echo "    SkillScale System Ready!              "
+echo "=========================================="
+echo "  • Gateway (HTTP): http://localhost:8085"
+echo "  • Console (Web):  http://localhost:8080"
+echo "  • Kafka Broker:   localhost:9092"
+echo "=========================================="
 
-# 3.1 Verify MCP (Independent process spawn)
-echo "- Validating MCP Protocol (Stdio)..."
-if python3 gateway/demo_mcp_client.py; then
-    echo "  ✓ MCP Client Test Passed"
 else
     echo "  ✗ MCP Client Test Failed"
     exit 1

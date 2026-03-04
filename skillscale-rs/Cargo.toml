@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "common",
+    "gateway",
+    "skill-server"
+]
+resolver = "2"

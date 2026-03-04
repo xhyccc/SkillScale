@@ -41,30 +41,44 @@ from a2a_protocol.pydantic_v2 import (
 
 def main():
     print("Starting A2A Client Demo using a2a_protocol...")
-    url = "http://127.0.0.1:8085/v1/agents/code-complexity/converse"
+    
+    # Rust Gateway URL schema:
+    # POST /v1/agents/{agent_id}/converse
+    # The Rust gateway listens on /v1/agents/{agent_id}/converse and expects the task params directly.
+    # We use a valid service name like 'code-analysis' or 'data-processing'.
+    
+    agent_id = "code-analysis"
+    url = f"http://127.0.0.1:8085/v1/agents/{agent_id}/converse"
     
     code_text = "def process_data(data):\n    count = 0\n    for item in data:\n        if item > 10:\n            count += 1\n            if count > 5:\n                return True\n    return False\n"
     
     # Construct A2A request using SDK models
+    # We construct the full request object to validate strict types, then extract params
+    # because the current Gateway endpoint expects the params object directly.
+    params = TaskSendParams(
+        id=f"task_{uuid.uuid4().hex[:8]}",
+        sessionId="session_888",
+        message=Message(
+            role=Role.user,
+            parts=[Part(root=TextPart(type="text", text=code_text))]
+        ),
+        metadata={
+            "topic": "TOPIC_CODE_ANALYSIS",
+            "skill": "code-complexity" 
+        } # <--- Explicitly provide routing hints via metadata instead of letting the gateway guess
+    )
+    
     a2a_req = SendTaskRequest(
         jsonrpc="2.0",
         id=str(uuid.uuid4()),
         method="tasks/send",
-        params=TaskSendParams(
-            id=f"task_{uuid.uuid4().hex[:8]}",
-            sessionId="session_888",
-            message=Message(
-                role=Role.user,
-                parts=[Part(root=TextPart(type="text", text=code_text))]
-            ),
-            metadata={"topic": "TOPIC_CODE_ANALYSIS"} # <--- Explicitly provide routing hints via metadata instead of letting the gateway guess
-        )
+        params=params
     )
     
-    # model_dump(mode='json') handles enum serialization correctly natively in pydantic v2
-    payload = a2a_req.model_dump(mode='json', exclude_none=True)
+    # Currently the Rust Gateway expects the params object directly, not the JSON-RPC envelope
+    payload = params.model_dump(mode='json', exclude_none=True)
     
-    print("\n[A2A Client] Sending A2A protocol request to Transparent Gateway...")
+    print("\n[A2A Client] Sending task params to Transparent Gateway...")
     print(f"Target: {url}")
     print(f"Payload: {json.dumps(payload, indent=2)}")
     print("-" * 50)

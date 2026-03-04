@@ -1,0 +1,13 @@
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/cmake/RdKafka/RdKafkaConfig.cmake
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/cmake/RdKafka/RdKafkaConfigVersion.cmake
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/cmake/RdKafka/FindLZ4.cmake
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/cmake/RdKafka/RdKafkaTargets.cmake
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/cmake/RdKafka/RdKafkaTargets-debug.cmake
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/share/licenses/librdkafka/LICENSES.txt
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/pkgconfig/rdkafka-static.pc
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/librdkafka.a
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/include/librdkafka/rdkafka.h
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/include/librdkafka/rdkafka_mock.h
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/pkgconfig/rdkafka++-static.pc
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/lib/librdkafka++.a
+/Users/haoyi/Desktop/SkillScale/skillscale-rs/target/debug/build/rdkafka-sys-2da515fd16f2eb0c/out/include/librdkafka/rdkafkacpp.h

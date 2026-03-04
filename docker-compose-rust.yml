@@ -1,0 +1,113 @@
+# SkillScale — Rust Backend + Redpanda (Kafka)
+#
+# Usage:
+#   docker compose -f docker-compose-rust.yml up --build
+
+services:
+  # ── Redpanda Broker ──
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.6
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --overprovisioned
+      - --node-id 0
+      - --check=false
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+    ports:
+      - "8081:8081"
+      - "8082:8082"
+      - "9092:9092"
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redpanda Console (Web UI) ──
+  console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.3
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yaml && /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yaml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:29092"]
+          schemaRegistry:
+            enabled: false
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redpanda
+
+  # ── Rust Gateway ──
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rust
+    # Use the 'gateway' command defined in the Dockerfile
+    command: ["gateway"]
+    environment:
+      # Kafka Configuration
+      SKILLSCALE_BROKER_URL: "redpanda:29092"
+      # Protocol Features
+      SKILLSCALE_GATEWAY_TIMEOUT: "180.0"
+      RUST_LOG: "info,gateway=debug"
+    ports:
+      - "8085:8085" # A2A / HTTP API
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Rust Skill Servers ──
+  
+  # Skill Server Instance 1: Code Analysis
+  skill-server-code:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rust
+    command: ["skill-server"]
+    environment:
+      SKILLSCALE_BROKER_URL: "redpanda:29092"
+      SKILLSCALE_TOPIC: "TOPIC_CODE_ANALYSIS"
+      SKILLSCALE_GROUP_ID: "skill-server-group-code"
+      SKILLSCALE_ROOT: "/app"
+      # LLM Credentials (passed from host env or defaults)
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_API_BASE: "${OPENAI_API_BASE}"
+      AZURE_API_KEY: "${AZURE_API_KEY}"
+      AZURE_API_BASE: "${AZURE_API_BASE}"
+      AZURE_API_VERSION: "${AZURE_API_VERSION}"
+      AZURE_MODEL: "${AZURE_MODEL}"
+      RUST_LOG: "info,skill_server=debug"
+    volumes:
+      # Mount local skills/scripts for development
+      - ./skills:/app/skills
+      - ./scripts:/app/scripts
+      - ./skills/code-analysis/AGENTS.md:/app/AGENTS.md
+      - ./.claude:/app/.claude
+      - ./opencode.json:/root/.config/opencode/config.json
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  redpanda-data:
