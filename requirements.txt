@@ -21,3 +21,5 @@ a2a-protocol>=0.1.0
 pytest>=8.0
 pytest-asyncio>=0.23
 pytest-timeout>=2.2
+aiokafka>=0.10.0
+aiokafka>=0.10.0

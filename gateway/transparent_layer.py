@@ -29,6 +29,7 @@ from a2a_protocol.pydantic_v2 import (
 )
 
 from skillscale.client import SkillScaleClient, ClientConfig
+from skillscale.kafka import SkillScaleKafkaClient, KafkaConfig
 
 log = logging.getLogger("skillscale.gateway")
 
@@ -40,8 +41,16 @@ class TransparentGateway:
     """
 
     def __init__(self, config: Optional[ClientConfig] = None):
+        import os
         self.config = config or ClientConfig.from_env()
-        self.zmq_client = SkillScaleClient(self.config)
+        self.backend_type = os.getenv("SKILLSCALE_BACKEND", "zmq").lower()
+        if self.backend_type in ["kafka", "redpanda"]:
+            self.client = SkillScaleKafkaClient()
+            log.info("Using Kafka/Redpanda backend")
+        else:
+            self.client = SkillScaleClient(self.config)
+            log.info("Using ZeroMQ backend")
+        
         self.mcp = FastMCP("SkillScaleMCPGateway") if FastMCP else None
         
         self.setup_mcp_tools()
@@ -49,8 +58,8 @@ class TransparentGateway:
 
     async def start(self):
         """Starts the gateway services."""
-        await self.zmq_client.connect()
-        log.info("ZMQ transparent layer connected.")
+        await self.client.connect()
+        log.info(f"{type(self.client).__name__} transparent layer connected.")
         
         # Start protocol servers asynchronously
         tasks = []
@@ -93,7 +102,7 @@ class TransparentGateway:
             log.info(f"[MCP] Routing tool '{skill_name}' to ZMQ '{topic}' with context.")
             
             # Send through the transparent ZMQ bus. SkillScale invoke expects a JSON string intent.
-            reply = await self.zmq_client.invoke(topic, json.dumps(zmq_payload), timeout=60.0)
+            reply = await self.client.invoke(topic, json.dumps(zmq_payload), timeout=60.0)
             return json.dumps(reply)
 
         @self.mcp.resource("skillscale://context/{session_id}")
@@ -106,7 +115,7 @@ class TransparentGateway:
             log.info(f"[MCP] Client requested shared context for session {session_id}")
             # Ask the ZMQ bus for the latest state of this session
             zmq_payload = {"action": "get_state", "session_id": session_id}
-            reply = await self.zmq_client.invoke("TOPIC_CONTEXT_SYNC", json.dumps(zmq_payload), timeout=5.0)
+            reply = await self.client.invoke("TOPIC_CONTEXT_SYNC", json.dumps(zmq_payload), timeout=5.0)
             return json.dumps(reply)
 
     async def _start_mcp_server(self):
@@ -160,7 +169,7 @@ class TransparentGateway:
             }
             
             # Send to ZMQ
-            reply = await self.zmq_client.invoke(target_topic, json.dumps(zmq_payload), timeout=120.0)
+            reply = await self.client.invoke(target_topic, json.dumps(zmq_payload), timeout=120.0)
             
             # Pack ZMQ reply back into Google A2A expected SendTaskResponse protocol structure
             a2a_resp = SendTaskResponse(
@@ -186,13 +195,13 @@ class TransparentGateway:
 
     async def _start_a2a_server(self):
         """Mock A2A server running on a specific port."""
-        log.info("Starting Google A2A Server bridge on port 8081...")
-        config = uvicorn.Config(self.a2a_app, host="127.0.0.1", port=8081, log_level="error")
+        log.info("Starting Google A2A Server bridge on port 8085...")
+        config = uvicorn.Config(self.a2a_app, host="127.0.0.1", port=8085, log_level="error")
         server = uvicorn.Server(config)
         await server.serve()
 
     async def stop(self):
-        await self.zmq_client.close()
+        await self.client.close()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

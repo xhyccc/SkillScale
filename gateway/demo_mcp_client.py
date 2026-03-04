@@ -38,7 +38,7 @@ async def main():
                         arguments={
                             "category": "CODE_ANALYSIS",
                             "skill_name": "code-complexity",
-                            "payload": {"code": "def process_data(data):\n    count = 0\n    for item in data:\n        if item > 10:\n            count += 1\n            if count > 5:\n                return True\n    return False"}
+                            "payload": {"input": "def process_data(data):\n    count = 0\n    for item in data:\n        if item > 10:\n            count += 1\n            if count > 5:\n                return True\n    return False"}
                         }
                     )
                     print(f" - Tool Result: {result}")
