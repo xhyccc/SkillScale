@@ -39,3 +39,9 @@ package-lock.json
 # OpenSkills (installed skills are copies — originals in skills/)
 .claude/
 .agent/
+
+# C/C++ object files
+*.o
+
+# Rust build artifacts
+skillscale-rs/target/
