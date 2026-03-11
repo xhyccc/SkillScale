@@ -1,9 +1,19 @@
 # SkillScale — Distributed Skill-as-a-Service Agent Infrastructure
 
 A middleware SDK and distributed infrastructure for executing AI agent skills at scale.
-It enables transparent routing between high-level reasoning protocols—**Model Context Protocol (MCP)** and **Google Agent-to-Agent (A2A)**—and a high-performance ZeroMQ C++ backend.
+It enables transparent routing between high-level reasoning protocols—**Model Context Protocol (MCP)** and **Google Agent-to-Agent (A2A)**—and a high-performance ZeroMQ/Kafka backend.
 The backend seamlessly discovers and executes capabilities configured as **Claude Skills** using the
 [OpenSkills](https://github.com/numman-ali/openskills) standard.
+
+### Protocol Capabilities (协议能力)
+
+1. **A2A (Agent-to-Agent / REST)**: 
+   * **English**: Supports **coarse-grained agent invocation**. The client asks for a general domain (e.g., `code-analysis`), and the backend's LLM routing dynamically matches the intent to the best granular skill.
+   * **中文**: 支持**粗粒度的 Agent 调用**。只需要传递领域类的 Agent，后端的 LLM 将会负责动态意图识别并匹配到具体的子技能去执行。
+
+2. **MCP (Model Context Protocol / Stdio)**:
+   * **English**: Supports **both coarse-grained agent invocation AND fine-grained skill invocation**. Clients can either rely on the backend agent (e.g., `agent__code-analysis`) to handle routing dynamically via LLM, or they can pinpoint specific explicit skills to execute unconditionally (e.g., `code-analysis__code-complexity`).
+   * **中文**: **同时支持细粒度的 Skill 调用和粗粒度的 Agent 调用**。客户端可以按粗粒度调用（例如 `agent__code-analysis`），依赖后端的 LLM 动态路由决策，也可以显式地直接调用具体的原子级工具（例如 `code-analysis__code-complexity`）。
 
 Skill matching is **LLM-powered by default**, and skills themselves function as capable micro-agents. Any established agent framework (**LangChain, LangGraph, CrewAI**) seamlessly interfaces with the network.
 
