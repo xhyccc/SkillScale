@@ -1,7 +1,7 @@
 # SkillScale — Distributed Skill-as-a-Service Agent Infrastructure
 
 A middleware SDK and distributed infrastructure for executing AI agent skills at scale.
-It enables transparent routing between high-level reasoning protocols—**Model Context Protocol (MCP)** and **Google Agent-to-Agent (A2A)**—and a high-performance ZeroMQ/Kafka backend.
+It enables transparent routing between high-level reasoning protocols—**Model Context Protocol (MCP)** and **Google Agent-to-Agent (A2A)**—and a high-performance Kafka backend.
 The backend seamlessly discovers and executes capabilities configured as **Claude Skills** using the
 [OpenSkills](https://github.com/numman-ali/openskills) standard.
 
@@ -30,18 +30,18 @@ Skill matching is **LLM-powered by default**, and skills themselves function as 
 └──────────┼──────────────────┼─────────────────┼─────────┘
            │                  │                 │
 ┌──────────▼──────────────────▼────────┐        │
-│    Transparent Python Gateway        │        │ JSON Intent
-│    (Translates MCP & A2A to ZMQ)     │        │
+│    Transparent Rust Gateway          │        │ JSON Intent
+│    (Translates MCP & A2A to Kafka)   │        │
 └──────────────────┬───────────────────┘        │
                    └───────────┬────────────────┘
                                │
-                       ZeroMQ PUB/SUB
+                       Kafka / Redpanda
 ┌──────────────────────────────▼────────────────────────────┐
-│  C++ XPUB/XSUB Proxy (:5444 XSUB │ :5555 XPUB │ :9100)    │
+│  Redpanda Broker                                          │
 └────────────┬──────────────────────────────────┬───────────┘
              │                                  │
  ┌───────────▼──────────────┐    ┌──────────────▼───────────┐
- │  C++ Skill Server         │    │  C++ Skill Server        │
+ │  Python Skill Server      │    │  Python Skill Server     │
  │  Topic: DATA_PROCESSING   │    │  Topic: CODE_ANALYSIS    │
  │  AGENTS.md → LLM match    │    │  AGENTS.md → LLM match   │
  │  ├─ text-summarizer       │    │  ├─ code-complexity      │
@@ -51,11 +51,11 @@ Skill matching is **LLM-powered by default**, and skills themselves function as 
 
 ### How It Works
 
-1. **Protocol Bridging** — High-level agents (like Claude Desktop via MCP or Google Engine via A2A) send requests to the Transparent Gateway. The gateway standardizes these into ZMQ payloads. Custom agent frameworks (LangChain, CrewAI) can also publish directly via the SDK.
-2. **Proxy forwarding** — The stateless XPUB/XSUB proxy forwards payloads to the matching C++ skill server.
-3. **Skill matching** — The C++ skill server parses `AGENTS.md` and dynamically matches intents using LLMs or keywords.
+1. **Protocol Bridging** — High-level agents (like Claude Desktop via MCP or Google Engine via A2A) send requests to the Transparent Gateway. The gateway standardizes these into Kafka payloads. Custom agent frameworks (LangChain, CrewAI) can also publish directly via the SDK.
+2. **Proxy forwarding** — The stateless Redpanda broker routes topic payloads to the matching Python skill server.
+3. **Skill matching** — The Python skill server parses `AGENTS.md` and dynamically matches intents using LLMs or keywords.
 4. **Claude Skills execution** — The matched skill's execution layer is invoked using standard Claude OpenSkills (via `scripts/run.py`). The sub-agents themselves call LLMs for intelligent analysis.
-5. **Response** — Results are published back over the ZMQ bus, through the gateway, and back formatted to the original client protocol (MCP or A2A).
+5. **Response** — Results are published back over Kafka, through the gateway, and back formatted to the original client protocol (MCP or A2A).
 
 ### OpenSkills Integration
 
@@ -74,13 +74,13 @@ npx openskills list                             # List installed skills
 npx openskills read <skill-name>                # Load skill content (progressive disclosure)
 npx openskills sync                             # Regenerate AGENTS.md
 
-# Runtime flow (C++ skill server uses these internally)
+# Runtime flow (Python skill server uses these internally)
 # Skill server starts → parses AGENTS.md <available_skills> XML
-#   → task arrives on ZMQ topic
+#   → task arrives on Kafka topic
 #   → LLM matching (default) or keyword scoring
 #   → npx openskills read <name> loads SKILL.md (progressive disclosure)
-#   → scripts/run.py executed with task data on stdin
-#   → result published back via ZMQ
+#   → scripts/opencode-exec executed with task data on stdin
+#   → result published back via Kafka
 ```
 
 ## Dual Intent Modes
@@ -108,10 +108,10 @@ result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b
 ```
 
 
-SkillScale includes a **Transparent Gateway** bridging external Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) networks down into the blazing-fast internal ZeroMQ bus.
+SkillScale includes a **Transparent Gateway** bridging external Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) networks down into the blazing-fast internal Kafka bus.
 
 ```bash
-./run_all.sh       # Starts Docker services + Python Gateway
+./run_with_redpanda.sh       # Starts Docker services + Rust Gateway
 ```
 
 | Bridge | Description |
@@ -125,67 +125,53 @@ SkillScale includes a **Transparent Gateway** bridging external Model Context Pr
 SkillScale/
 ├── skillscale/                 # Python SDK (the middleware)
 │   ├── __init__.py             # Public API: SkillScaleClient, SkillDiscovery
-│   ├── client.py               # Core async ZMQ pub/sub client
+│   ├── client.py               # Core async Kafka client
 │   ├── discovery.py            # AGENTS.md scanner & metadata registry
 │   └── adapters/
 │       ├── langchain.py        # LangChain tools + toolkit
 │       ├── langgraph.py        # LangGraph nodes + graph factory
 │       └── crewai.py           # CrewAI tool adapter
+├── skillscale-rs/              # Rust workspace
+│   ├── gateway/                # Axum REST (A2A) + rmcp (stdIO) server
+│   │   └── src/                # Translated payload routers
+│   └── shared/                 # Common libs
 ├── examples/                   # Ready-to-run agent examples
 │   ├── direct_client.py        # Raw SDK usage (no framework)
 │   ├── langchain_agent.py      # LangChain ReAct agent
 │   └── langgraph_agent.py      # LangGraph state graph
-├── proxy/                      # C++ XPUB/XSUB proxy
-│   ├── main.cpp
-│   └── CMakeLists.txt
-├── skill-server/               # C++ skill server (OpenSkills)
-│   ├── main.cpp                # Worker thread pool, ZMQ sockets, CLI config
-│   ├── skill_loader.cpp/h      # AGENTS.md parser, LLM/keyword matching
-│   ├── skill_executor.cpp/h    # POSIX fork/exec with timeout
-│   ├── message_handler.cpp/h   # JSON envelope serialization
-│   └── CMakeLists.txt
 ├── scripts/                    # Shared tooling
 │   ├── openskills              # Thin wrapper → npx openskills (npm CLI)
-│   ├── llm_match.py            # LLM-powered skill matching (Python subprocess)
+│   ├── opencode-exec           # Executable router for matched skills
 │   └── prompts/
 │       └── skill_match.txt     # Configurable prompt template for LLM matching
-├── agent/                      # Standalone CLI agent (uses SDK)
-│   ├── main.py
+├── agent/                      # Python skill servers & LLM matchers
+│   ├── main_kafka.py           # Main Kafka workers mapping topic -> skills
 │   └── requirements.txt
 ├── skills/                     # Portable skill definitions (OpenSkills format)
 │   ├── llm_utils.py            # Shared LLM client (Azure/OpenAI/Zhipu)
 │   ├── data-processing/
 │   │   ├── AGENTS.md           # OpenSkills discovery manifest
-│   │   ├── text-summarizer/    # SKILL.md + scripts/run.py
-│   │   └── csv-analyzer/       # SKILL.md + scripts/run.py
+│   │   └── text-summarizer/    # SKILL.md + scripts/run.py
 │   └── code-analysis/
 │       ├── AGENTS.md           # OpenSkills discovery manifest
-│       ├── code-complexity/    # SKILL.md + scripts/run.py
-│       └── dead-code-detector/ # SKILL.md + scripts/run.py
-│   └── management/
-│       ├── server.py           # FastAPI backend (API + chat + tracing)
-│       └── frontend/           # React + Vite frontend (3 tabs)
-├── tests/                      # 34 integration & fault-tolerance tests
+│       └── code-complexity/    # SKILL.md + scripts/run.py
 ├── docker/                     # Multi-stage Dockerfiles
 ├── k8s/                        # Kubernetes manifests + CRDs + KEDA
 ├── requirements.txt            # All Python dependencies (unified)
-├── run_all.sh                  # Bootstrap and Launch SkillScale System
-└── build.sh                    # Docker build & launch
+├── run_with_redpanda.sh        # Bootstrap and Launch SkillScale System
+└── build_with_redpanda.sh      # Docker build & launch
 ```
 
 ## Components
 
 | Component | Language | Description |
 |-----------|----------|-------------|
-| **skillscale/** | Python 3.10+ | **Middleware SDK** — core ZMQ client, skill discovery, and framework adapters (LangChain, LangGraph, CrewAI) |
-| **gateway/** | Python 3.10+ | Transparent Gateway bridging Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) to internal ZMQ. |
-| **proxy/** | C++17 | XPUB/XSUB stateless message switch with Prometheus metrics on `:9100` |
-| **skill-server/** | C++17 | Multi-threaded subscriber; parses `AGENTS.md` for OpenSkills discovery; matches tasks via LLM (default) or keyword scoring; executes skills via POSIX `fork`/`exec` with configurable timeouts |
-| **scripts/** | Python + Shell | `npx openskills` wrapper, LLM skill matcher (`llm_match.py`), configurable prompt templates |
-| **agent/** | Python 3.10+ | Standalone CLI agent built on the SDK; LLM-powered topic routing |
+| **skillscale/** | Python 3.10+ | **Middleware SDK** — core Kafka client, skill discovery, and framework adapters |
+| **skillscale-rs/** | Rust | Transparent Gateway bridging Model Context Protocol (MCP stdio) and Google Agent-to-Agent (A2A HTTPS) down into internal Kafka. |
+| **agent/** | Python 3.10+ | Python skill servers; parses `AGENTS.md` for OpenSkills discovery; matches tasks via LLM |
+| **scripts/** | Python + Shell | `npx openskills` wrapper, LLM execution pipelines, prompt templates |
 | **examples/** | Python | Working examples: direct client, LangChain agent, LangGraph graph |
-| **skills/** | Markdown + Python | `AGENTS.md` discovery manifests, `SKILL.md` metadata, `scripts/run.py` LLM-powered executables, shared `llm_utils.py` |
-| **tests/** | Python (pytest) | 34 tests covering proxy routing, agent E2E, skill execution, and fault tolerance |
+| **skills/** | Markdown + Python | `AGENTS.md` discovery manifests, `SKILL.md` metadata, `scripts/opencode-exec` LLM-powered executables, shared `llm_utils.py` |
 | **k8s/** | YAML | Namespace, Deployments, Services, SkillTopic CRD, KEDA ScaledObjects |
 
 ## Available Skills
@@ -220,13 +206,10 @@ Set `LLM_PROVIDER=azure|openai|zhipu` in `.env` to select the active provider.
 
 | Dependency | macOS (Homebrew) | Ubuntu/Debian |
 |------------|------------------|---------------|
-| CMake >= 3.16 | `brew install cmake` | `apt install cmake` |
-| libzmq | `brew install zeromq` | `apt install libzmq3-dev` |
-| cppzmq | `brew install cppzmq` | `apt install libzmq3-dev` (headers included) |
-| nlohmann-json | `brew install nlohmann-json` | `apt install nlohmann-json3-dev` |
-| pkg-config | `brew install pkg-config` | `apt install pkg-config` |
+| Rust / Cargo | `rustup-init` | `rustup-init` |
 | Python >= 3.10 | `brew install python` | `apt install python3 python3-venv` |
 | Node.js >= 20.6 | `brew install node` | `apt install nodejs npm` |
+| Docker & Docker Compose | `brew install docker` | `apt install docker.io docker-compose-plugin` |
 
 ### One-Command Install
 
@@ -238,20 +221,17 @@ This does everything:
 - Creates a Python virtual environment and installs all dependencies
 - Installs the `openskills` npm CLI and registers all 4 skills
 - Generates `AGENTS.md` files via `npx openskills sync`
-- Builds both C++ binaries (proxy + skill server)
 - Installs the `skillscale` SDK in development mode
 
-
 ```bash
-./run_all.sh
+./run_with_redpanda.sh
 ```
 
 This starts **everything**:
-- ZMQ infrastructure and C++ agents via Docker
-- Transparent Gateway (MCP & A2A Bridge) on localhost:8081
+- Kafka/Redpanda infrastructure and Python skill servers via Docker Compose
+- Transparent Rust Gateway (MCP & A2A Bridge) routing topics locally
 
 Press `Ctrl+C` to stop all services.
-
 
 ### Install the SDK
 
@@ -271,93 +251,26 @@ pip install -e ".[all]"           # everything
 Start each component in separate terminals:
 
 ```bash
-# Terminal 1: XPUB/XSUB Proxy
-./proxy/build/skillscale_proxy
+# Terminal 1: Kafka Message Broker
+docker-compose -f docker-compose-redpanda.yml up -d redpanda
 
 # Terminal 2: Skill Server (data-processing, LLM matching)
-./skill-server/build/skillscale_skill_server \
+source .venv/bin/activate
+python3 agent/main_kafka.py \
   --topic TOPIC_DATA_PROCESSING \
   --skills-dir ./skills/data-processing \
-  --matcher llm \
-  --python .venv/bin/python3
+  --matcher llm
 
 # Terminal 3: Skill Server (code-analysis, LLM matching)
-./skill-server/build/skillscale_skill_server \
+source .venv/bin/activate
+python3 agent/main_kafka.py \
   --topic TOPIC_CODE_ANALYSIS \
   --skills-dir ./skills/code-analysis \
-  --matcher llm \
-  --python .venv/bin/python3
+  --matcher llm
 
-# Terminal 4: Python Agent
-source .venv/bin/activate
-python3 agent/main.py
+# Terminal 4: Rust Gateway
+cd skillscale-rs/gateway && cargo run --release
 ```
-
-### Run with Docker Compose
-
-```bash
-docker compose up --build
-```
-
-Brings up the proxy, two skill servers (data-processing + code-analysis), and the agent.
-Proxy ports `5444`/`5555`/`9100` are exposed on the host.
-
-## Testing
-
-### Integration Tests (34 tests, no live services required)
-
-```bash
-source .venv/bin/activate
-python3 -m pytest tests/ -v
-```
-
-The test suite spins up an in-process ZeroMQ proxy and mock skill servers automatically.
-
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `test_01_proxy.py` | 5 | PubSub routing, topic filtering, JSON integrity, multi-subscriber |
-| `test_02_agent_e2e.py` | 9 | Single/sequential/parallel requests, timeout handling, large payloads, request correlation |
-| `test_03_skills.py` | 9 | Real subprocess execution of all 4 skill scripts, SKILL.md frontmatter parsing |
-| `test_04_fault_tolerance.py` | 6 | Timeout enforcement, slow servers, stale future GC, rapid fire, crash recovery |
-
-### Live E2E Test (requires running C++ services)
-
-```bash
-python3 test_e2e_live.py
-```
-
-### Concurrent Stress Test Suite (end-to-end latency)
-
-Use the dedicated stress runner to measure throughput and latency percentiles
-($p50$, $p95$, $p99$) under concurrent load.
-
-```bash
-source .venv/bin/activate
-
-# Full pipeline: HTTP chat API -> routing -> ZMQ -> skill server -> response
-python3 stress_test_e2e.py \
-   --mode chat-api \
-   --requests 200 \
-   --concurrency 20 \
-   --topic TOPIC_DATA_PROCESSING \
-   --timeout 120
-
-# Direct Docker network path: docker exec -> ZMQ -> skill server
-python3 stress_test_e2e.py \
-   --mode docker-exec \
-   --requests 100 \
-   --concurrency 10 \
-   --topic TOPIC_CODE_ANALYSIS \
-   --timeout 120
-
-# Optional: export machine-readable summary
-python3 stress_test_e2e.py --mode chat-api --requests 100 --concurrency 10 --json-out /tmp/skillscale_stress.json
-```
-
-Output includes:
-- total duration and throughput (requests/sec)
-- success rate and sample failures
-- latency stats: `min`, `mean`, `p50`, `p90`, `p95`, `p99`, `max`
 
 ## Configuration
 
@@ -409,7 +322,7 @@ ZHIPU_MODEL=GLM-4.7-FlashX
 # Concurrent worker threads per skill server container
 SKILLSCALE_WORKERS=2
 
-# Skill execution timeout (ms) — how long C++ skill server waits
+# Skill execution timeout (ms) — how long Python skill server waits
 # for OpenCode/skill subprocess to complete
 SKILLSCALE_TIMEOUT=300000
 
@@ -455,7 +368,7 @@ SKILLSCALE_SETTLE_TIME=0.5
 ```
 ./skillscale_skill_server [OPTIONS]
 
-  --topic <TOPIC>         ZeroMQ topic to subscribe to
+  --topic <TOPIC>         Kafka topic to subscribe to
   --description <DESC>    Human-readable server description
   --skills-dir <DIR>      Path to skills directory (containing AGENTS.md)
   --matcher <MODE>        Skill matching strategy: llm (default) or keyword
@@ -469,23 +382,23 @@ SKILLSCALE_SETTLE_TIME=0.5
 
 ## Message Protocol
 
-All messages use ZeroMQ multipart frames with JSON payloads.
+All messages use standard Kafka topic routing with JSON payloads.
 
-**Request** (Agent -> Skill Server):
-```
-Frame 0: "TOPIC_DATA_PROCESSING"          # topic prefix for routing
-Frame 1: {                                 # JSON payload
+**Request** (Agent -> Skill Server via Kafka):
+```json
+// Topic: "TOPIC_DATA_PROCESSING" 
+{
   "request_id": "a1b2c3d4",
   "reply_to":   "AGENT_REPLY_9f8e7d6c",
-  "intent":     "...",                     # Mode 1 or Mode 2
+  "intent":     "...",
   "timestamp":  1739836800.123
 }
 ```
 
-**Response** (Skill Server -> Agent):
-```
-Frame 0: "AGENT_REPLY_9f8e7d6c"           # reply_to topic from request
-Frame 1: {                                 # JSON payload
+**Response** (Skill Server -> Agent via Kafka):
+```json
+// Topic: "AGENT_REPLY_9f8e7d6c" 
+{
   "request_id": "a1b2c3d4",
   "status":     "success",
   "content":    "## CSV Analysis\n..."
@@ -542,7 +455,7 @@ from skillscale.adapters.langgraph import SkillScaleGraph
 
 sg = SkillScaleGraph.from_skills_dir(client, "./skills")
 graph = sg.build_graph(llm=my_llm)     # Mode 1: LLM picks the skill
-graph = sg.build_graph(task_based=True) # Mode 2: C++ server matches via LLM
+graph = sg.build_graph(task_based=True) # Mode 2: Python server matches via LLM
 ```
 
 ### CrewAI
