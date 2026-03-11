@@ -1,16 +1,18 @@
 # ── Stage 1: Build Rust Binaries ──
-FROM docker.m.daocloud.io/rust:1-bookworm AS builder
+# Use specific version on Bookworm to match runtime OS
+FROM rust:1.85-bookworm as builder
+# Install CMake and Clang (required for rdkafka-sys)
 RUN apt-get update && apt-get install -y cmake clang libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src/skillscale-rs
 COPY skillscale-rs/ .
-# Build release binaries for gateway, skill-server, and mcp-server
-# Note: cargo build --release builds all members of the workspace
+# Build release binaries for gateway and skill-server
 RUN cargo build --release
 
 # ── Stage 2: Download OpenCode CLI ──
-FROM docker.m.daocloud.io/debian:bookworm-slim AS opencode-dl
+FROM debian:bookworm-slim as opencode-dl
 # Install curl for reliable fetching
 RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Use ARG for build argument version control
 ARG OPENCODE_VERSION=1.2.6
 # Automatically detect architecture and download correct binary
 RUN ARCH=$(dpkg --print-architecture) && \
@@ -19,40 +21,52 @@ RUN ARCH=$(dpkg --print-architecture) && \
     elif [ "$ARCH" = "arm64" ]; then \
         BINARY_URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-arm64.tar.gz"; \
     else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
+        echo "Unsupported architecture: $ARCH"; exit 1; \
     fi && \
+    curl -L "$BINARY_URL" -o /tmp/opencode.tar.gz && \
     mkdir -p /tmp/opencode && \
-    curl -L "$BINARY_URL" | tar -xz -C /tmp/opencode
+    tar xzf /tmp/opencode.tar.gz -C /tmp/opencode && \
+    chmod +x /tmp/opencode/opencode
 
-# ── Stage 3: Runtime Image ──
-FROM docker.m.daocloud.io/python:3.11-bookworm
+# ── Stage 3: Unified Runtime Image ──
+# Use bookworm (Debian 12) to match rust:latest glibc version
+FROM python:3.11-bookworm
 
-# Install runtime dependencies (OpenSSL, etc. for rdkafka and Rust binaries)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl3 ca-certificates curl bash procps && \
-    rm -rf /var/lib/apt/lists/*
+    curl \
+    ca-certificates \
+    libssl3 \
+    bash \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy OpenCode CLI
 COPY --from=opencode-dl /tmp/opencode/opencode /usr/local/bin/opencode
 
-# Copy Rust binaries from builder
+# Copy Rust Binaries
 COPY --from=builder /usr/src/skillscale-rs/target/release/gateway /usr/local/bin/gateway
 COPY --from=builder /usr/src/skillscale-rs/target/release/skill-server /usr/local/bin/skill-server
-COPY --from=builder /usr/src/skillscale-rs/target/release/mcp-server /usr/local/bin/mcp-server
 
 WORKDIR /app
 
-# Copy Python requirements and install
+# Install Python dependencies (Shared)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy scripts and skill definitions
+# Copy project scripts and skills
 COPY scripts/ /app/scripts/
 COPY skills/ /app/skills/
 COPY .claude/ /app/.claude/
+# AGENTS.md varies per deployment or is centrally located. 
+# For now, we COPY it if it exists in the root, otherwise rely on the mounted volume.
+# COPY AGENTS.md /app/AGENTS.md
+# Optional: copy opencode.json if it exists
+# COPY opencode.json /app/opencode.json
 
+# Environment Setup
 ENV SKILLSCALE_ROOT=/app
 ENV PATH="/app/scripts:${PATH}"
 
-# Default entrypoint (overridden by docker-compose)
+# Default entrypoint (overridden by docker-compose command)
 CMD ["gateway"]

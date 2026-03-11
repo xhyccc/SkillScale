@@ -29,7 +29,10 @@ export PYTHONPATH="${PYTHONPATH:-}:."
 
 # 2. Build and Start Docker Services
 echo ""
-echo "[2] Starting Docker core services via build.sh..."
+echo "[2] Compiling Rust Gateway locally (for MCP Stdio support)..."
+(cd skillscale-rs && cargo build --release --bin gateway)
+
+echo "[2b] Starting Docker core services via build.sh..."
 # Pass arguments like --no-clean to build.sh if provided
 bash build.sh "$@"
 
@@ -56,10 +59,19 @@ echo "[3] Validating SkillScale Gateway..."
 # 3.1 Verify A2A Protocol (HTTP)
 echo "- Validating A2A Client Demo (HTTP)..."
 # We use the python script but ensure it points to localhost:8085
-if python3 gateway/demo_a2a_client.py; then
+if python3 examples/demo_a2a_client.py; then
     echo "  ✓ A2A Client Demo Passed"
 else
     echo "  ✗ A2A Client Demo Failed (Check docker logs for gateway)"
+    exit 1
+fi
+
+# 3.2 Verify MCP Protocol
+echo "- Validating MCP Client Demo (Stdio)..."
+if python3 examples/demo_mcp_client.py; then
+    echo "  ✓ MCP Client Demo Passed"
+else
+    echo "  ✗ MCP Client Demo Failed"
     exit 1
 fi
 

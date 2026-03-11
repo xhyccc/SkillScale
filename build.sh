@@ -28,6 +28,9 @@ cd "$SCRIPT_DIR"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+# Ensure we use native architecture (avoid accidental amd64 emulation on Apple Silicon)
+unset DOCKER_DEFAULT_PLATFORM
+
 log()  { echo -e "${GREEN}[build]${NC} $*"; }
 warn() { echo -e "${YELLOW}[build]${NC} $*"; }
 err()  { echo -e "${RED}[build]${NC} $*" >&2; }
@@ -244,6 +247,9 @@ ENV_BLOCK='      SKILLSCALE_BROKER_URL: "redpanda:29092"
 [[ -n "${AZURE_API_VERSION:-}" ]] && ENV_BLOCK+=$'\n''      AZURE_API_VERSION: "'"${AZURE_API_VERSION}"'"'
 [[ -n "${ZHIPU_API_KEY:-}" ]]     && ENV_BLOCK+=$'\n''      ZHIPU_API_KEY: "'"${ZHIPU_API_KEY}"'"'
 [[ -n "${ZHIPU_MODEL:-}" ]]       && ENV_BLOCK+=$'\n''      ZHIPU_MODEL: "'"${ZHIPU_MODEL}"'"'
+# Default RUST_LOG if not set
+RUST_LOG="${RUST_LOG:-info,skill_server=debug}"
+ENV_BLOCK+=$'\n''      RUST_LOG: "'"${RUST_LOG}"'"'
 
 # Start composing
 cat > "$COMPOSE_FILE" <<'HEADER'
@@ -338,13 +344,15 @@ for i in "${!SKILL_DIRS[@]}"; do
     SKILL_SERVICE_NAMES+=("$svc_name")
 
     cat >> "$COMPOSE_FILE" <<SKILL_SVC
-  # ── Skill Server (Rust): ${name} ──
+  # ── Skill Server (Rust): ${name} [Ephemeral Workspace] ──
   ${svc_name}:
     build:
       context: .
       dockerfile: docker/Dockerfile.rust
     command: ["skill-server"]
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      TMPDIR: "/tmp"
       SKILLSCALE_TOPIC: "${topic}"
       SKILLSCALE_GROUP_ID: "skill-server-group-${name}"
 ${ENV_BLOCK}
@@ -353,7 +361,18 @@ ${ENV_BLOCK}
       - ./${dir}/AGENTS.md:/app/AGENTS.md:ro
       - ./skills:/app/skills:ro
       - ./opencode.json:/root/.config/opencode/config.json:ro
-      - ./.claude/skills:/app/.claude/skills:ro
+      - ./.claude:/app/.claude:ro
+      - ./scripts:/app/scripts:ro
+    # Ephemeral Execution Workspace Configuration
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/tmp
+      - /root/.cache
+      - /root/.local
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       redpanda:
         condition: service_healthy

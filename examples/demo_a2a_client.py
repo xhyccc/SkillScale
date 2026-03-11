@@ -92,7 +92,7 @@ def main():
     )
     
     try:
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with urllib.request.urlopen(req, timeout=120) as response:
             if response.status == 200:
                 resp_data = json.loads(response.read().decode('utf-8'))
                 print("\n[A2A Client] Received A2A format response:")

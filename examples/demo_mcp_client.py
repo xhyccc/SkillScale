@@ -8,20 +8,23 @@ from mcp.client.stdio import stdio_client
 async def main():
     print("Starting MCP Client Demo...")
     
-    # Run the Rust MCP Server via Docker
-    print("Connecting to Rust MCP Server via Docker...")
+    # Run the Rust Gateway as an MCP Stdio Server
+    server_env = os.environ.copy()
+    server_env["SKILLSCALE_BROKER_URL"] = "localhost:9092"
+    server_env["RUST_BACKTRACE"] = "1"
+    
+    # Path to compiled Rust binary
+    rust_gateway_bin = os.path.abspath("skillscale-rs/target/release/gateway")
+    
+    if not os.path.exists(rust_gateway_bin):
+        print(f"Error: Rust gateway binary not found at {rust_gateway_bin}")
+        print("Did you run ./run.sh to compile it?")
+        sys.exit(1)
+
     server_params = StdioServerParameters(
-        command="docker",
-        args=[
-            "run", 
-            "-i",
-            "--rm",
-            "--network", "skillscale_default",
-            "-e", "SKILLSCALE_BROKER_URL=redpanda:29092",
-            "skillscale-gateway:latest",
-            "/usr/local/bin/mcp-server"
-        ],
-        env=os.environ.copy()
+        command=rust_gateway_bin,
+        args=["--mcp"],
+        env=server_env
     )
     
     try:
@@ -29,6 +32,8 @@ async def main():
             async with ClientSession(read, write) as session:
                 print("Initializing MCP Session...")
                 await session.initialize()
+                
+                await asyncio.sleep(2)
                 
                 print("\nFetching available MCP Tools...")
                 tools = await session.list_tools()
@@ -43,11 +48,9 @@ async def main():
                 print("\nTest Tool Invocation:")
                 try:
                     result = await session.call_tool(
-                        "invoke_skill",
+                        "agent__code-analysis",
                         arguments={
-                            "category": "CODE_ANALYSIS",
-                            "skill_name": "code-complexity",
-                            "payload": {"input": "def process_data(data):\n    count = 0\n    for item in data:\n        if item > 10:\n            count += 1\n            if count > 5:\n                return True\n    return False"}
+                            "input": "def process_data(data):\n    count = 0\n    for item in data:\n        if item > 10:\n            count += 1\n            if count > 5:\n                return True\n    return False\nPlease check this code's complexity."
                         }
                     )
                     print(f" - Tool Result: {result}")
@@ -62,8 +65,21 @@ async def main():
                     print(f" - Resource read raised (expected if ZMQ proxy/server is offline): {e}")
                     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Failed to connect or run demo: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        if sys.platform == "win32":
+            loop = asyncio.ProactorEventLoop()
+            asyncio.set_event_loop(loop)
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # Hack to silence unclosed transport errors on quick exit
+        pass
