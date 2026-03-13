@@ -272,13 +272,8 @@ SkillScale/
 ├── examples/                   # Ready-to-run demo scripts
 │   ├── demo_a2a_client.py      # A2A protocol demo (coarse-grained)
 │   └── demo_mcp_client.py      # MCP protocol demo (coarse + fine-grained)
-├── skillscale/                 # Python SDK (middleware)
-│   ├── client.py               # Async Kafka client
-│   ├── discovery.py            # AGENTS.md scanner
-│   └── adapters/               # LangChain, LangGraph, CrewAI adapters
 ├── docker/                     # Multi-stage Dockerfiles
 │   └── Dockerfile.rust         # Builds Gateway + Skill Server + bundles skills
-├── k8s/                        # Kubernetes manifests + KEDA autoscaling
 ├── build.sh                    # Docker build & launch (generates docker-compose.yml)
 ├── run_all.sh                  # Full bootstrap: venv + build + launch + validate
 └── .env                        # API keys & configuration
@@ -354,16 +349,6 @@ All internal communication uses Kafka topic routing with JSON payloads.
 3. Rebuild: `docker compose build && docker compose up -d`
 
 4. The Gateway auto-discovers the new skill as an MCP tool on next startup.
-
----
-
-## Kubernetes Deployment
-
-```bash
-kubectl apply -f k8s/
-```
-
-Includes namespace, deployments, services, `SkillTopic` CRD, and KEDA ScaledObjects for auto-scaling skill servers based on Kafka consumer lag.
 
 ---
 

@@ -199,7 +199,7 @@ async fn handle_request(state: &AppState, req: JsonRpcRequest) -> Option<JsonRpc
                     "tools": [
                         {
                             "name": "invoke_skill",
-                            "description": "Expose internal ZMQ skills to MCP clients.\n            This routes an MCP tool call transparently over ZMQ to the corresponding Skill Server.",
+                            "description": "Expose internal Kafka-backed skills to MCP clients.\n            This routes an MCP tool call transparently over Kafka to the corresponding Skill Server.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {

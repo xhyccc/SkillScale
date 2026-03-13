@@ -78,6 +78,34 @@ else
 fi
 
 echo ""
+# 3.3 Verify Python Adapter Examples
+echo "- Validating Python Adapter Examples..."
+
+echo "  • LangChain adapter"
+if python3 examples/demo_langchain_adapter.py; then
+    echo "    ✓ LangChain Adapter Demo Passed"
+else
+    echo "    ✗ LangChain Adapter Demo Failed"
+    exit 1
+fi
+
+echo "  • LangGraph adapter"
+if python3 examples/demo_langgraph_adapter.py; then
+    echo "    ✓ LangGraph Adapter Demo Passed"
+else
+    echo "    ✗ LangGraph Adapter Demo Failed"
+    exit 1
+fi
+
+echo "  • CrewAI adapter"
+if python3 examples/demo_crewai_adapter.py; then
+    echo "    ✓ CrewAI Adapter Demo Passed"
+else
+    echo "    ✗ CrewAI Adapter Demo Failed"
+    exit 1
+fi
+
+echo ""
 echo "=========================================="
 echo "    SkillScale System Ready!              "
 echo "=========================================="

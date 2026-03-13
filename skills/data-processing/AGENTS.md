@@ -33,7 +33,7 @@ SKILL.md format.
 ## Invocation
 
 Skills are invoked by the skill server when it receives a task-based intent
-on the `TOPIC_DATA_PROCESSING` ZeroMQ topic. The server uses LLM-powered
+on the `TOPIC_DATA_PROCESSING` Kafka topic. The server uses LLM-powered
 matching to select the best skill for each incoming task, loads the SKILL.md
 for full instructions, and executes `scripts/run.py`.
 
