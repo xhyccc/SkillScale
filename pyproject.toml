@@ -24,7 +24,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyzmq>=25.0",
     "pydantic>=2.0",
 ]
 

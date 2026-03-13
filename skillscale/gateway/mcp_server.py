@@ -13,7 +13,7 @@ except ImportError:
     FastMCP = None
 
 # Assuming skillscale package is in PYTHONPATH
-from skillscale.client import SkillScaleClient, ClientConfig
+from skillscale.kafka import SkillScaleClient, ClientConfig
 from skillscale.kafka import SkillScaleKafkaClient, KafkaConfig
 
 log = logging.getLogger("skillscale.gateway")

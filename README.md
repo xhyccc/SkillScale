@@ -111,7 +111,7 @@ result = await client.invoke("TOPIC_DATA_PROCESSING", "analyze the CSV data: a,b
 SkillScale includes a **Transparent Gateway** bridging external Model Context Protocol (MCP) and Google Agent-to-Agent (A2A) networks down into the blazing-fast internal Kafka bus.
 
 ```bash
-./run_with_redpanda.sh       # Starts Docker services + Rust Gateway
+./run_all.sh       # Starts Docker services + Rust Gateway
 ```
 
 | Bridge | Description |
@@ -158,8 +158,8 @@ SkillScale/
 ├── docker/                     # Multi-stage Dockerfiles
 ├── k8s/                        # Kubernetes manifests + CRDs + KEDA
 ├── requirements.txt            # All Python dependencies (unified)
-├── run_with_redpanda.sh        # Bootstrap and Launch SkillScale System
-└── build_with_redpanda.sh      # Docker build & launch
+├── run_all.sh        # Bootstrap and Launch SkillScale System
+└── build.sh      # Docker build & launch
 ```
 
 ## Components
@@ -214,7 +214,7 @@ Set `LLM_PROVIDER=azure|openai|zhipu` in `.env` to select the active provider.
 ### One-Command Install
 
 ```bash
-chmod +x setup.sh && ./setup.sh
+bash ./run_all.sh
 ```
 
 This does everything:
@@ -224,7 +224,7 @@ This does everything:
 - Installs the `skillscale` SDK in development mode
 
 ```bash
-./run_with_redpanda.sh
+./run_all.sh
 ```
 
 This starts **everything**:
@@ -252,7 +252,7 @@ Start each component in separate terminals:
 
 ```bash
 # Terminal 1: Kafka Message Broker
-docker-compose -f docker-compose-redpanda.yml up -d redpanda
+docker-compose -f docker-compose.yml up -d redpanda
 
 # Terminal 2: Skill Server (data-processing, LLM matching)
 source .venv/bin/activate

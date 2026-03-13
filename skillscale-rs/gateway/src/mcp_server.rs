@@ -14,6 +14,10 @@ use rmcp::{
     model::*,
     service::{RequestContext, RoleServer},
     transport::stdio,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+        session::local::LocalSessionManager,
+    },
 };
 
 #[derive(Clone)]
@@ -234,5 +238,39 @@ pub async fn run_stdio_server(state: Arc<AppState>) {
         Err(e) => {
             error!("MCP Server Binding Error: {:?}", e);
         }
+    }
+}
+
+/// Run MCP server over Streamable HTTP (SSE) on the given port.
+/// This allows MCP clients to connect via HTTP — no binary launch needed.
+pub async fn run_sse_server(state: Arc<AppState>, port: u16) {
+    let ct = tokio_util::sync::CancellationToken::new();
+    let ct_clone = ct.clone();
+
+    let service = StreamableHttpService::new(
+        move || Ok(GatewayMcpServer::new(state.clone())),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig {
+            cancellation_token: ct.child_token(),
+            ..Default::default()
+        },
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let bind_addr = format!("0.0.0.0:{}", port);
+    info!("MCP SSE Server listening on {}", bind_addr);
+
+    let tcp_listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .expect("Failed to bind MCP SSE port");
+
+    if let Err(e) = axum::serve(tcp_listener, router)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c().await.ok();
+            ct_clone.cancel();
+        })
+        .await
+    {
+        error!("MCP SSE Server error: {}", e);
     }
 }

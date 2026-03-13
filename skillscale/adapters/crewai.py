@@ -25,7 +25,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Type
 
-from skillscale.client import SkillScaleClient
+from skillscale.kafka import SkillScaleClient
 from skillscale.discovery import SkillDiscovery, SkillMetadata
 
 log = logging.getLogger("skillscale.crewai")

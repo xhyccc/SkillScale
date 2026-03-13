@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
 
-from skillscale.client import SkillScaleClient
+from skillscale.kafka import SkillScaleClient
 from skillscale.discovery import SkillDiscovery, SkillMetadata
 
 log = logging.getLogger("skillscale.langchain")

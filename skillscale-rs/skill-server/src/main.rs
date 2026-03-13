@@ -22,13 +22,16 @@ async fn main() -> Result<()> {
 
     let broker_url = std::env::var("SKILLSCALE_BROKER_URL").unwrap_or_else(|_| "localhost:9092".to_string());
     
-    // Create Consumer
+    // Create Consumer with unique group ID to avoid stale offset commits
+    let group_id = std::env::var("SKILLSCALE_GROUP_ID")
+        .unwrap_or_else(|_| format!("skill-server-{}", uuid::Uuid::new_v4()));
     let consumer: StreamConsumer = ClientConfig::new()
-        .set("group.id", std::env::var("SKILLSCALE_GROUP_ID").unwrap_or_else(|_| "skill-server-group".to_string()))
+        .set("group.id", &group_id)
         .set("bootstrap.servers", &broker_url)
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "true")
+        .set("auto.offset.reset", "earliest")
         .create()
         .context("Consumer creation failed")?;
 

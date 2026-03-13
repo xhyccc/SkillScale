@@ -25,28 +25,32 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 pip install -r requirements.txt >/dev/null
-export PYTHONPATH=$PYTHONPATH:.
+export PYTHONPATH="${PYTHONPATH:-}:."
 
 # 2. Build and Start Docker Services
 echo ""
 echo "[2] Starting Docker core services via build.sh..."
+# Purge Kafka/Redpanda volumes to avoid stale messages from previous runs
+docker compose down -v 2>/dev/null || true
 # Pass arguments like --no-clean to build.sh if provided
 bash build.sh "$@"
 
-# Wait for Rust Gateway (Port 8085)
-echo "Waiting for Rust Gateway (localhost:8085)..."
+# Wait for Rust Gateway (A2A on 8085, MCP on 8086)
+echo "Waiting for Rust Gateway..."
 for ((i=1; i<=30; i++)); do
-    if curl -s http://localhost:8085 >/dev/null; then
-        echo "Rust Gateway is responding!"
-        break
-    fi
-     # Also try socket check if endpoint returns 404/500
-    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 8085))" 2>/dev/null; then
-        echo "Rust Gateway port is open!"
+    if curl -s http://localhost:8085/health >/dev/null 2>&1; then
+        echo "  A2A port 8085 is ready."
         break
     fi
     echo -n "."
     sleep 2
+done
+for ((i=1; i<=15; i++)); do
+    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 8086))" 2>/dev/null; then
+        echo "  MCP port 8086 is ready."
+        break
+    fi
+    sleep 1
 done
 echo ""
 
@@ -56,7 +60,7 @@ echo "[3] Validating SkillScale Gateway..."
 # 3.1 Verify A2A Protocol (HTTP)
 echo "- Validating A2A Client Demo (HTTP)..."
 # We use the python script but ensure it points to localhost:8085
-if python3 gateway/demo_a2a_client.py; then
+if python3 examples/demo_a2a_client.py; then
     echo "  ✓ A2A Client Demo Passed"
 else
     echo "  ✗ A2A Client Demo Failed (Check docker logs for gateway)"
@@ -64,63 +68,22 @@ else
 fi
 
 echo ""
+# 3.2 Verify MCP Protocol (Streamable HTTP)
+echo "- Validating MCP Client Demo (http://localhost:8086/mcp)..."
+if python3 examples/demo_mcp_client.py; then
+    echo "  ✓ MCP Client Demo Passed"
+else
+    echo "  ✗ MCP Client Demo Failed"
+    exit 1
+fi
+
+echo ""
 echo "=========================================="
 echo "    SkillScale System Ready!              "
 echo "=========================================="
-echo "  • Gateway (HTTP): http://localhost:8085"
+echo "  • A2A Gateway:    http://localhost:8085"
+echo "  • MCP Server:     http://localhost:8086/mcp"
 echo "  • Console (Web):  http://localhost:8080"
 echo "  • Kafka Broker:   localhost:9092"
 echo "=========================================="
-
-else
-    echo "  ✗ MCP Client Test Failed"
-    exit 1
-fi
-
-# 3.2 Start Gateway (Background) & Verify A2A
-echo "- Starting Gateway for A2A Protocol..."
-export PYTHONPATH=$PYTHONPATH:.
-# Start Gateway in background, logging to file
-SKILLSCALE_PROTOCOL_MCP=0 python3 gateway/transparent_layer.py > gateway.log 2>&1 &
-GATEWAY_PID=$!
-echo "  PID: $GATEWAY_PID"
-
-# Trap to ensure we kill the gateway if the script exits abnormally (during startup/tests)
-# Once we reach the end successfully, we want the process to stay alive, so we'll clear the trap.
-trap "kill $GATEWAY_PID 2>/dev/null" EXIT
-
-# Wait for A2A Port 8085
-echo "  Waiting for A2A Server (port 8085)..."
-for ((i=1; i<=15; i++)); do
-    if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('localhost', 8085))" 2>/dev/null; then
-        echo "  Port 8085 is ready."
-        break
-    fi
-    sleep 1
-done
-
-echo "- Validating A2A Connectivity..."
-if python3 gateway/demo_a2a_client.py; then
-    echo "  ✓ A2A Client Test Passed"
-else
-    echo "  ✗ A2A Client Test Failed (see output above / gateway.log)"
-    tail -n 20 gateway.log
-    exit 1
-fi
-
-# Clear the trap so the gateway stays running after script exit
-trap - EXIT
-
-echo ""
-echo "=========================================="
-echo "    All Systems GO!                       "
-echo "=========================================="
-echo "Gateway A2A Server running on port 8085."
-echo "PID: $GATEWAY_PID"
-echo "Log: gateway.log"
-echo ""
-echo "Run 'tail -f gateway.log' to follow logs."
-echo "Run 'kill $GATEWAY_PID' to stop the gateway."
-echo ""
-
 

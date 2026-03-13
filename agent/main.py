@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 # Ensure the SDK is importable from repo root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from skillscale.client import SkillScaleClient, ClientConfig
+from skillscale.kafka import SkillScaleClient, ClientConfig
 
 logging.basicConfig(
     level=logging.INFO,

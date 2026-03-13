@@ -7,7 +7,7 @@
 #   2. Cleans compiled artifacts (C++ build dirs, __pycache__, etc.)
 #   3. Generates opencode.json from .env values
 #   4. Generates docker-compose.yml by scanning skills/ subfolders
-#   5. Builds Docker images for proxy, each skill server, and agent
+#   5. Builds Docker images for the Rust gateway, skill servers, and agent
 #   6. Launches the full Docker stack
 #
 # Usage:
@@ -97,11 +97,7 @@ SKILLSCALE_HWM="${SKILLSCALE_HWM:-10000}"
 SKILLSCALE_HEARTBEAT="${SKILLSCALE_HEARTBEAT:-5000}"
 SKILLSCALE_MATCHER="${SKILLSCALE_MATCHER:-llm}"
 SKILLSCALE_PYTHON="${SKILLSCALE_PYTHON:-python3}"
-SKILLSCALE_XSUB_BIND="${SKILLSCALE_XSUB_BIND:-tcp://*:5444}"
-SKILLSCALE_XPUB_BIND="${SKILLSCALE_XPUB_BIND:-tcp://*:5555}"
 SKILLSCALE_METRICS_PORT="${SKILLSCALE_METRICS_PORT:-9100}"
-SKILLSCALE_PROXY_XSUB="${SKILLSCALE_PROXY_XSUB:-tcp://127.0.0.1:5444}"
-SKILLSCALE_PROXY_XPUB="${SKILLSCALE_PROXY_XPUB:-tcp://127.0.0.1:5555}"
 SKILLSCALE_SETTLE_TIME="${SKILLSCALE_SETTLE_TIME:-0.5}"
 
 log "LLM_PROVIDER=$LLM_PROVIDER"
@@ -322,10 +318,11 @@ services:
     command: ["gateway"]
     environment:
       SKILLSCALE_BROKER_URL: "redpanda:29092"
-      SKILLSCALE_GATEWAY_TIMEOUT: "180.0"
+      SKILLSCALE_GATEWAY_TIMEOUT: "${SKILLSCALE_GATEWAY_TIMEOUT:-600.0}"
       RUST_LOG: "info,gateway=debug"
     ports:
       - "8085:8085"
+      - "8086:8086"
     depends_on:
       redpanda:
         condition: service_healthy
@@ -504,6 +501,7 @@ echo ""
 log "${GREEN}${BOLD}SkillScale (Rust + Redpanda) is running!${NC}"
 echo ""
 echo -e "  ${CYAN}Gateway A2A/HTTP:${NC}  http://localhost:8085"
+echo -e "  ${CYAN}Gateway MCP/SSE:${NC}  http://localhost:8086/mcp"
 echo -e "  ${CYAN}Redpanda Kafka:${NC}    localhost:9092"
 echo -e "  ${CYAN}Redpanda Console:${NC}  http://localhost:8080"
 echo ""

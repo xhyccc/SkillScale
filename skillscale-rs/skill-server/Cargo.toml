@@ -12,5 +12,6 @@ tracing-subscriber = "0.3"
 rdkafka = { version = "0.36", features = ["cmake-build"] }
 walkdir = "2.5"
 anyhow = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
 common = { path = "../common" }
 

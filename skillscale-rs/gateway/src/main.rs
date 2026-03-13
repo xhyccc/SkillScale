@@ -54,11 +54,11 @@ async fn main() {
 
     let broker_url = std::env::var("SKILLSCALE_BROKER_URL").unwrap_or_else(|_| "localhost:9092".to_string());
     
-    // Parse gateway timeout from env, default to 300s
+    // Parse gateway timeout from env, default to 600s
     let gateway_timeout_secs = std::env::var("SKILLSCALE_GATEWAY_TIMEOUT")
-        .unwrap_or_else(|_| "300.0".to_string())
+        .unwrap_or_else(|_| "600.0".to_string())
         .parse::<f64>()
-        .unwrap_or(300.0);
+        .unwrap_or(600.0);
     let gateway_timeout = Duration::from_secs_f64(gateway_timeout_secs);
     
     // Create a unique group ID to ensure we get a fresh consumer group
@@ -78,7 +78,8 @@ async fn main() {
     let reply_topic_clone = reply_topic.clone();
     let broker_url_clone = broker_url.clone();
     
-    // Disable Kafka listener in MCP mode for now to isolate stdout issues
+    // Disable Kafka reply listener only in MCP stdio mode (stdout conflicts)
+    // In normal mode and MCP SSE mode, we need the reply consumer
     if !args.mcp {
         tokio::spawn(async move {
             info!("Starting Reply Consumer on topic: {}", reply_topic_clone);
@@ -139,6 +140,12 @@ async fn main() {
         mcp_server::run_stdio_server(state).await;
         return;
     }
+
+    // Launch MCP SSE server on port 8086 (runs alongside the A2A HTTP server)
+    let mcp_state = state.clone();
+    tokio::spawn(async move {
+        mcp_server::run_sse_server(mcp_state, 8086).await;
+    });
 
     let app = Router::new()
         .route("/health", get(|| async { "OK" }))
